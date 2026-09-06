@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Before filing, it is worth five minutes with the
-        [troubleshooting guide](https://usgs-river-widget.pages.dev/troubleshooting.html) —
+        [troubleshooting guide](https://riverwidget.com/troubleshooting.html) —
         it resolves most reports, and its live USGS test tells you straight away
         whether the data source is up.
 

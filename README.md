@@ -7,16 +7,16 @@ There is no code in this repository. It exists so that anyone running the widget
 on a site has somewhere to report a problem, ask a question, or read what
 changed — without needing to know anything about how it is built.
 
-- **Build a widget** — https://usgs-river-widget.pages.dev
-- **Troubleshooting guide** — https://usgs-river-widget.pages.dev/troubleshooting.html
-- **FAQ** — https://usgs-river-widget.pages.dev/faq.html
+- **Build a widget** — https://riverwidget.com
+- **Troubleshooting guide** — https://riverwidget.com/troubleshooting.html
+- **FAQ** — https://riverwidget.com/faq.html
 
 ---
 
 ## Before opening an issue
 
 Most reports resolve in a couple of minutes with the
-[troubleshooting guide](https://usgs-river-widget.pages.dev/troubleshooting.html).
+[troubleshooting guide](https://riverwidget.com/troubleshooting.html).
 It starts with the question that splits the problem in half — is one widget
 affected, or all of them — because the answers are entirely different.
 
