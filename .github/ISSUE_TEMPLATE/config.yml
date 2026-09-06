@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Troubleshooting guide
+    url: https://usgs-river-widget.pages.dev/troubleshooting.html
+    about: Work out whether it is the gauge, the page, or USGS — usually in a couple of minutes.
+  - name: FAQ
+    url: https://usgs-river-widget.pages.dev/faq.html
+    about: Embed methods, data freshness, styling, privacy and licensing.
+  - name: Is the gauge itself reporting?
+    url: https://waterdata.usgs.gov/
+    about: Check the station page at USGS. A gauge that is down there has nothing to send us.

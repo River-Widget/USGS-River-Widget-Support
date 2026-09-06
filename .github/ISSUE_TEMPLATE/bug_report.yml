@@ -1,0 +1,70 @@
+name: Something is not working
+description: A widget is blank, showing the wrong thing, or behaving oddly.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, it is worth five minutes with the
+        [troubleshooting guide](https://usgs-river-widget.pages.dev/troubleshooting.html) —
+        it resolves most reports, and its live USGS test tells you straight away
+        whether the data source is up.
+
+  - type: input
+    id: page
+    attributes:
+      label: Page URL
+      description: Where the widget is embedded. A public URL we can open is ideal.
+      placeholder: https://example.com/river-flows/
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: How much is affected?
+      options:
+        - One widget — others on the site still work
+        - Every widget on the page
+        - Every widget across the whole site
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Output of RiverWidget.diagnose()
+      description: >
+        Open developer tools, go to the Console, type RiverWidget.diagnose() and
+        press enter. Paste the whole result here.
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console messages matching "River Widget"
+      description: Reload the page with the console open and search for River Widget.
+      render: text
+
+  - type: input
+    id: gauges
+    attributes:
+      label: USGS site numbers involved
+      placeholder: "12041200, 12043000"
+
+  - type: input
+    id: env
+    attributes:
+      label: Browser, operating system, and the platform the site runs on
+      placeholder: Chrome 128 / macOS 15 / WordPress with Elementor

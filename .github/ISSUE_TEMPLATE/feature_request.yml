@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest something the widget should be able to do.
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that you cannot do today?
+      description: >
+        The situation is more useful than the solution — it often has an answer
+        that is simpler than the feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What did you have in mind?
+
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Who is this for?
+      options:
+        - My own site
+        - Sites I build for clients
+        - A fly shop, guide service or lodge
+        - Something else

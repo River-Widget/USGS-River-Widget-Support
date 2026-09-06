@@ -1,0 +1,23 @@
+name: Question
+description: How do I do something, or why does it work this way?
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The [FAQ](https://usgs-river-widget.pages.dev/faq.html) covers embed
+        methods, data freshness, styling, privacy and licensing. If your answer
+        is not there, ask away — gaps in it are worth knowing about.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like to know?
+    validations:
+      required: true
+
+  - type: input
+    id: page
+    attributes:
+      label: Page URL, if relevant
