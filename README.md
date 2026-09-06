@@ -8,15 +8,15 @@ on a site has somewhere to report a problem, ask a question, or read what
 changed — without needing to know anything about how it is built.
 
 - **Build a widget** — https://riverwidget.com
-- **Troubleshooting guide** — https://riverwidget.com/troubleshooting.html
-- **FAQ** — https://riverwidget.com/faq.html
+- **Troubleshooting guide** — https://riverwidget.com/troubleshooting
+- **FAQ** — https://riverwidget.com/faq
 
 ---
 
 ## Before opening an issue
 
 Most reports resolve in a couple of minutes with the
-[troubleshooting guide](https://riverwidget.com/troubleshooting.html).
+[troubleshooting guide](https://riverwidget.com/troubleshooting).
 It starts with the question that splits the problem in half — is one widget
 affected, or all of them — because the answers are entirely different.
 
