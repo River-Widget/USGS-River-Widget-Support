@@ -28,7 +28,9 @@ instructions.
 
 ## What you give up
 
-**Automatic fixes when USGS changes something.** This is the important one.
+**Automatic fixes when USGS changes something.** This is the important one, and
+pinning a version does not cost you it — a pinned copy is still ours to
+supersede, and you can move to a new one in seconds. A self-hosted copy is not.
 
 This project exists because USGS retired an API and thousands of pages went
 dark. Those pages were not badly built — they embedded something that could not
@@ -51,19 +53,28 @@ the aggregate numbers. Not a problem for you; worth knowing.
 
 ## A middle ground worth considering first
 
-If the concern is "what if they push a breaking change," pin a version rather
-than taking a copy:
+If the concern is "what if they push a change that breaks my site," **pin a
+version** rather than taking a copy. Two paths are published:
 
 ```
-https://cdn.riverwidget.com/v1/widget.js
+https://cdn.riverwidget.com/v1/widget.js       rolling — always the newest build
+https://cdn.riverwidget.com/2.1.0/widget.js    frozen — never changes, ever
 ```
 
-`/v1/` is a stable path. A breaking change would ship at `/v2/`, and `/v1/`
-would keep working. You get stability without owning a file, and you still get
-fixes within that major version.
+A pinned version is immutable and cached for a year. Nothing we do can alter it.
+You test a new release when it suits you, change one number, and move.
 
-If the concern is genuinely "what if they disappear," self-hosting is the answer
-and the rest of this document applies.
+`/v1/` versions the **embed contract** — the `data-` attributes in your HTML —
+not the widget. It changes only if that contract breaks, which would strand
+every existing embed. The widget's own version moves underneath it.
+
+The current versions are listed at
+[`/versions.json`](https://cdn.riverwidget.com/versions.json).
+
+**Pinning solves most of what people come here for.** It gives you change
+control without owning a file, and you can still move forward when a USGS change
+makes it necessary. Self-hosting is the answer only to "what if they disappear
+entirely" — if that is genuinely your concern, read on.
 
 ---
 

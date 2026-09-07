@@ -61,6 +61,24 @@ on this repository, and allow a reasonable window to respond before disclosing.
 
 ---
 
+## Versions
+
+Two paths are published:
+
+| Path | Behaviour |
+| --- | --- |
+| `https://cdn.riverwidget.com/v1/widget.js` | Rolling. Always the newest build — fixes reach you without re-pasting an embed. This is what the builder generates. |
+| `https://cdn.riverwidget.com/2.1.0/widget.js` | Pinned. Frozen and cached for a year; never changes once published. |
+
+Pin when you need change control — an SLA, a locked-down environment, or a
+client who wants to test before moving. Everyone else should stay on the rolling
+path, which is the one that gets fixed when USGS changes something.
+
+`/v1/` versions the *embed contract* — the `data-` attributes in your HTML — not
+the widget. Current versions: [`/versions.json`](https://cdn.riverwidget.com/versions.json).
+
+---
+
 ## Self-hosting
 
 You can serve `widget.js` from your own domain rather than ours. It is MIT
