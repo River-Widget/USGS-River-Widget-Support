@@ -61,12 +61,31 @@ on this repository, and allow a reasonable window to respond before disclosing.
 
 ---
 
+## Self-hosting
+
+You can serve `widget.js` from your own domain rather than ours. It is MIT
+licensed, it is one file with no dependencies, and it needs nothing from us at
+runtime — the readings come from USGS directly.
+
+Most sites should not. The trade is that you stop receiving fixes: this project
+exists because USGS retired an API and thousands of pages that had embedded
+something unfixable went dark. A self-hosted copy is that same shape.
+
+[**Self-hosting guide**](SELF-HOSTING.md) — when it makes sense, what you give
+up, and how to do it properly, including the MIME-type step people miss.
+
+---
+
 ## Releases
 
 Release notes are published under
-[Releases](https://github.com/River-Widget/USGS-River-Widget-Support/releases). The widget is served from a single versioned URL, so
-fixes reach every site without anyone re-pasting an embed — you do not need to
-do anything to receive them.
+[Releases](https://github.com/River-Widget/USGS-River-Widget-Support/releases).
+The widget is served from a single versioned URL, so fixes reach every site
+without anyone re-pasting an embed — you do not need to do anything to receive
+them.
+
+If you self-host, you do. Releases flag anything a self-hoster must act on,
+particularly a USGS API change.
 
 Breaking changes, if there ever are any, will ship at a new path and the old one
 will keep working.
