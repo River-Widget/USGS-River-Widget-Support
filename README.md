@@ -3,9 +3,10 @@
 Bugs, questions and feature requests for the **River Widget**: a free embeddable
 panel showing live river conditions from USGS stream gauges.
 
-There is no code in this repository. It exists so that anyone running the widget
-on a site has somewhere to report a problem, ask a question, or read what
-changed — without needing to know anything about how it is built.
+The source lives elsewhere. What is here is the issue tracker, the release
+notes, and a copy of the widget file itself — so that anyone running it has
+somewhere to report a problem, ask a question, read what changed, or take a copy
+that does not depend on our hosting still existing.
 
 - **Build a widget** — https://riverwidget.com
 - **Troubleshooting guide** — https://riverwidget.com/troubleshooting
@@ -91,6 +92,11 @@ something unfixable went dark. A self-hosted copy is that same shape.
 
 [**Self-hosting guide**](SELF-HOSTING.md) — when it makes sense, what you give
 up, and how to do it properly, including the MIME-type step people miss.
+
+A copy of every released `widget.js` is kept in [`widget/`](widget/) and attached
+to each [Release](../../releases). That is deliberate: instructions that say
+"download it from our CDN" would be a dead link precisely when someone needs
+them most.
 
 ---
 

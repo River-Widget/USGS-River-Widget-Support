@@ -1,0 +1,41 @@
+# The widget file
+
+A copy of `widget.js` for every published release, kept here so it survives
+independently of our hosting.
+
+The normal way to use the widget is to load it from
+`https://cdn.riverwidget.com/v1/widget.js` — that path is rolling, so fixes
+reach your site without you doing anything. These copies exist for two narrower
+reasons:
+
+- **You are self-hosting.** See [SELF-HOSTING.md](../SELF-HOSTING.md) for the
+  trade-offs first, because they are real.
+- **We are gone.** If riverwidget.com stops resolving, the instructions that
+  say "take a copy from our CDN" become a dead link. These files do not.
+
+Every file here is byte-identical to what the CDN serves at the matching pinned
+path. `widget-latest.js` tracks whichever release is current.
+
+## Files
+
+| File | Equivalent to |
+| --- | --- |
+| `widget-latest.js` | `https://cdn.riverwidget.com/v1/widget.js` |
+| `widget-2.1.0.js` | `https://cdn.riverwidget.com/2.1.0/widget.js` |
+
+They are also attached to each [Release](../../../releases), which is usually
+the easier place to grab one.
+
+## Verifying a copy
+
+```bash
+diff <(curl -s https://cdn.riverwidget.com/2.1.0/widget.js) widget-2.1.0.js
+```
+
+No output means they match.
+
+## Licence
+
+MIT. Use it, fork it, host it, ship it to clients. The river data itself is
+produced by the U.S. Geological Survey and is in the U.S. public domain — see
+the [licence notes](../README.md#licence).
