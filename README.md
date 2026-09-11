@@ -9,6 +9,7 @@ somewhere to report a problem, ask a question, read what changed, or take a copy
 that does not depend on our hosting still existing.
 
 - **Build a widget** — https://riverwidget.com
+- **Installing it** — [INSTALLING.md](INSTALLING.md), including WordPress
 - **Troubleshooting guide** — https://riverwidget.com/troubleshooting
 - **FAQ** — https://riverwidget.com/faq
 
@@ -69,7 +70,7 @@ Two paths are published:
 | Path | Behaviour |
 | --- | --- |
 | `https://cdn.riverwidget.com/v1/widget.js` | Rolling. Always the newest build — fixes reach you without re-pasting an embed. This is what the builder generates. |
-| `https://cdn.riverwidget.com/2.1.0/widget.js` | Pinned. Frozen and cached for a year; never changes once published. |
+| `https://cdn.riverwidget.com/2.2.0/widget.js` | Pinned. Frozen and cached for a year; never changes once published. |
 
 Pin when you need change control — an SLA, a locked-down environment, or a
 client who wants to test before moving. Everyone else should stay on the rolling
@@ -92,6 +93,10 @@ something unfixable went dark. A self-hosted copy is that same shape.
 
 [**Self-hosting guide**](SELF-HOSTING.md) — when it makes sense, what you give
 up, and how to do it properly, including the MIME-type step people miss.
+
+Whichever way you host it, [**INSTALLING.md**](INSTALLING.md) covers where the
+script tag goes and why, running several widgets on one page, and WordPress —
+including a ready PHP snippet and the optimisation settings that break embeds.
 
 A copy of every released `widget.js` is kept in [`widget/`](widget/) and attached
 to each [Release](../../releases). That is deliberate: instructions that say

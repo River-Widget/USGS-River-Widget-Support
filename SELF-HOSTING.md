@@ -58,7 +58,7 @@ version** rather than taking a copy. Two paths are published:
 
 ```
 https://cdn.riverwidget.com/v1/widget.js       rolling — always the newest build
-https://cdn.riverwidget.com/2.1.0/widget.js    frozen — never changes, ever
+https://cdn.riverwidget.com/2.2.0/widget.js    frozen — never changes, ever
 ```
 
 A pinned version is immutable and cached for a year. Nothing we do can alter it.
