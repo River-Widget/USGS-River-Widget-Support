@@ -22,6 +22,7 @@ path. `widget-latest.js` tracks whichever release is current.
 | File | Equivalent to |
 | --- | --- |
 | `widget-latest.js` | `https://cdn.riverwidget.com/v1/widget.js` |
+| `widget-2.4.0.js` | `https://cdn.riverwidget.com/2.4.0/widget.js` |
 | `widget-2.3.0.js` | `https://cdn.riverwidget.com/2.3.0/widget.js` |
 | `widget-2.2.0.js` | `https://cdn.riverwidget.com/2.2.0/widget.js` |
 | `widget-2.1.0.js` | `https://cdn.riverwidget.com/2.1.0/widget.js` |
@@ -33,7 +34,7 @@ the easier place to grab one.
 ## Verifying a copy
 
 ```bash
-diff <(curl -s https://cdn.riverwidget.com/2.3.0/widget.js) widget-2.3.0.js
+diff <(curl -s https://cdn.riverwidget.com/2.4.0/widget.js) widget-2.4.0.js
 ```
 
 No output means they match.

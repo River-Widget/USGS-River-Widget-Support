@@ -32,7 +32,7 @@ instructions.
 pinning a version does not cost you it — a pinned copy is still ours to
 supersede, and you can move to a new one in seconds. A self-hosted copy is not.
 
-This project exists because USGS retired an API and thousands of pages went
+This project exists because USGS switched off an endpoint and thousands of pages went
 dark. Those pages were not badly built — they embedded something that could not
 be fixed centrally. A self-hosted copy is that same shape: a frozen file on your
 server. When USGS next changes something, hosted embeds are fixed once and

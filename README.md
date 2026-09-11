@@ -88,7 +88,7 @@ licensed, it is one file with no dependencies, and it needs nothing from us at
 runtime — the readings come from USGS directly.
 
 Most sites should not. The trade is that you stop receiving fixes: this project
-exists because USGS retired an API and thousands of pages that had embedded
+exists because USGS switched off an endpoint and thousands of pages that had embedded
 something unfixable went dark. A self-hosted copy is that same shape.
 
 [**Self-hosting guide**](SELF-HOSTING.md) — when it makes sense, what you give

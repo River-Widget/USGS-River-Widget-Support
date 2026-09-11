@@ -239,6 +239,46 @@ Two settings do cause trouble:
 
 ---
 
+## How many requests a page makes
+
+The widget reads USGS from the visitor's browser. USGS allows **1,000 requests per
+hour per IP address** unauthenticated, and each embed costs up to three — the
+current reading, the 6-hour trend, and the chart.
+
+The important part: **gauges inside one embed are batched into the same request.**
+Six gauges in one embed cost exactly what one gauge costs.
+
+| Page | Requests per load | Loads/hour before USGS refuses |
+| --- | ---: | ---: |
+| 10 rivers, one embed each | 30 | ~33 |
+| 10 rivers, chart off | 20 | ~50 |
+| 10 rivers, two embeds of five | 6 | ~166 |
+
+Two things tighten it further. USGS sends `no-store`, so browsers are forbidden
+from caching the responses — every reload is fresh requests. And the default
+`data-refresh="900"` re-fetches every 15 minutes, so a tab left open on a
+ten-embed page spends 120 requests an hour doing nothing.
+
+Normal visitors rarely hit this. The two groups who do are **you, while building
+the page** (30 reloads will do it) and visitors behind a **shared IP** — office,
+school, hotel, mobile carrier — where the 1,000 is split across everyone.
+
+When it happens, cards fall back to our cached copy and say `Cached`. Nothing
+breaks; you just stop seeing live numbers on some cards.
+
+**If a layout genuinely needs each gauge placed separately** — a river, a
+paragraph, the next river — use `data-source="proxy"` on those embeds. The
+readings then come from our API rather than the visitor's browser: no USGS
+requests from their machine at all, and our edge cache collapses every visitor
+across every site into one upstream request per gauge per 15 minutes.
+
+The trade-off, stated plainly: readings can be up to 15 minutes old, and the
+page depends on our service being up rather than only on USGS. It still degrades
+to a working link to the station if we are unreachable — but to a link, not to
+numbers. See [the FAQ](https://riverwidget.com/faq#data-source).
+
+---
+
 ## The badge
 
 Each widget carries a small "River Widget" link, once per widget rather than once per
