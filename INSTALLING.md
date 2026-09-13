@@ -83,7 +83,8 @@ One loader, as many anchors as you like:
 ```
 
 A single anchor can also carry several gauges, which renders them as one group
-and is usually what you want for a conditions page:
+and is usually what you want for a conditions page — and costs one request
+rather than several, since the readings are fetched together:
 
 ```html
 <a class="riverwidget"
@@ -94,6 +95,32 @@ and is usually what you want for a conditions page:
 
 Including the loader twice is harmless — it notices and stops — but there is no
 reason to.
+
+### What a grid does with gauges that differ
+
+Gauges are not alike, and the grid does not pretend they are. **Each card shows
+what its own gauge publishes.**
+
+- A reading a gauge does not publish is **left off that card**, not blanked. No
+  dash, no empty slot — a dash reads as a sensor that failed rather than one
+  that was never fitted. Cards can therefore carry different numbers of
+  readings and differ slightly in height.
+- The 6-hour trend behaves the same way: present where there is recent data,
+  absent where there is not.
+- A gauge that publishes **none** of what you asked for says so — "This gauge
+  does not report streamflow. It publishes gauge height." — and links to the
+  station. About one live USGS gauge in five reports stage but no flow, so a
+  flow-only grid meets one eventually.
+- Theme, colours, chart, units, columns and footer settings are **shared** by
+  every card in the embed. Two rivers styled differently means two embeds.
+- `data-labels` is a `|`-separated list, one per gauge, in the same order as
+  `data-sites`. A single label does not apply to a multi-gauge embed.
+
+`data-metrics` is a property of the **embed**, not of a gauge. Every card is
+asked for the same readings and shows whichever of them it has. To show
+different readings on different rivers, use a separate embed per river — and
+note that costs a separate set of requests, so weigh it against the table
+above.
 
 ---
 
