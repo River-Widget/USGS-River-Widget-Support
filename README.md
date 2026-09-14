@@ -9,6 +9,8 @@ somewhere to report a problem, ask a question, read what changed, or take a copy
 that does not depend on our hosting still existing.
 
 - **Build a widget** — https://riverwidget.com
+- **What changed** — https://riverwidget.com/changelog, which flags the releases
+  that need an edit to your embed rather than arriving on their own
 - **Installing it** — [INSTALLING.md](INSTALLING.md), including WordPress
 - **Troubleshooting guide** — https://riverwidget.com/troubleshooting
 - **FAQ** — https://riverwidget.com/faq
@@ -108,10 +110,18 @@ them most.
 ## Releases
 
 Release notes are published under
-[Releases](https://github.com/River-Widget/USGS-River-Widget-Support/releases).
+[Releases](https://github.com/River-Widget/USGS-River-Widget-Support/releases),
+and summarised at [riverwidget.com/changelog](https://riverwidget.com/changelog).
+
 The widget is served from a single versioned URL, so fixes reach every site
 without anyone re-pasting an embed — you do not need to do anything to receive
 them.
+
+The exception is a release that adds a new `data-` attribute. Code reaches your
+embeds; markup cannot. An existing embed keeps working exactly as it is and
+simply does not get the new option until you add it. The changelog marks those
+releases separately and says, for each option, what it does and whether it suits
+you.
 
 If you self-host, you do. Releases flag anything a self-hoster must act on,
 particularly a USGS API change.
