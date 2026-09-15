@@ -22,7 +22,7 @@ instructions.
 - You are on Wix, Squarespace, Shopify or similar. Use the hosted script or the
   iframe embed. Self-hosting needs file upload and MIME control that most
   managed platforms do not give you.
-- Nobody at your organisation will notice a release six months from now.
+- Nobody at your organization will notice a release six months from now.
 
 ---
 
@@ -107,7 +107,7 @@ Anywhere reachable over HTTPS on your own domain. Common choices:
 
 Your server must send `Content-Type: application/javascript` or
 `text/javascript`. Browsers refuse to execute a script served as `text/plain`,
-and some hosts do exactly that for files they do not recognise.
+and some hosts do exactly that for files they do not recognize.
 
 ```bash
 curl -sI https://your-site.com/js/widget.js | grep -i content-type

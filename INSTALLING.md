@@ -111,7 +111,7 @@ what its own gauge publishes.**
   does not report streamflow. It publishes gauge height." — and links to the
   station. About one live USGS gauge in five reports stage but no flow, so a
   flow-only grid meets one eventually.
-- Theme, colours, chart, units, columns and footer settings are **shared** by
+- Theme, colors, chart, units, columns and footer settings are **shared** by
   every card in the embed. Two rivers styled differently means two embeds.
 - `data-labels` is a `|`-separated list, one per gauge, in the same order as
   `data-sites`. A single label does not apply to a multi-gauge embed.

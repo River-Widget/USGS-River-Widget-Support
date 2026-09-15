@@ -69,7 +69,7 @@ on this repository, and allow a reasonable window to respond before disclosing.
 
 Two paths are published:
 
-| Path | Behaviour |
+| Path | Behavior |
 | --- | --- |
 | `https://cdn.riverwidget.com/v1/widget.js` | Rolling. Always the newest build — fixes reach you without re-pasting an embed. This is what the builder generates. |
 | `https://cdn.riverwidget.com/2.2.0/widget.js` | Pinned. Frozen and cached for a year; never changes once published. |
@@ -140,7 +140,7 @@ code.
 
 ---
 
-## Licence
+## License
 
 The widget, builder and API are MIT licensed. The data is produced by the U.S.
 Geological Survey and is in the U.S. public domain — free to use, adapt and
