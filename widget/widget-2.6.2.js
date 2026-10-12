@@ -1,0 +1,1561 @@
+/*!
+ * USGS River Widget v2.6.2 — embeddable live river conditions
+ * MIT licensed. Free for personal and commercial use. No sign-up, no API key.
+ * Data courtesy of the U.S. Geological Survey (U.S. public domain).
+ * Provisional USGS data, subject to revision — waterdata.usgs.gov/provisional-data-statement/
+ *
+ * Embed:
+ *   <a class="riverwidget" href="https://waterdata.usgs.gov/monitoring-location/USGS-12041200/"
+ *      data-site="12041200" data-label="HOH RIVER" data-theme="river">HOH RIVER — current flow</a>
+ *   <script src="https://YOUR-HOST/v1/widget.js" async></script>
+ *
+ * Compatibility ladder, widest rung first:
+ *   no JavaScript      -> the anchor stays a working link to the USGS station
+ *   JavaScript, no CORS-> the anchor stays a working link (we never blank the page)
+ *   IE10/IE11          -> XHR + inline render, scoped class names, flexbox
+ *   modern browsers    -> Shadow DOM, full style isolation from the host theme
+ *
+ * No dependencies. Nothing to install server-side.
+ */
+(function () {
+  'use strict';
+
+  // Several embeds on one page means several copies of the loader snippet.
+  // The snippet guards by script id, but a hand-written page, a plugin, or a
+  // page builder that rewrites markup can still get the file in twice. Running
+  // the IIFE again would install a second MutationObserver and a second set of
+  // refresh timers, so bail if we are already here.
+  if (window.RiverWidget && window.RiverWidget.version) return;
+
+  var VERSION = '2.6.2';
+  var USGS = 'https://api.waterdata.usgs.gov/ogcapi/v0/collections';
+  var SELECTOR = 'a.riverwidget, .riverwidget-io, [data-river-site], [data-river-sites]';
+  var hostSeq = 0;
+  /**
+   * Past this, a reading stops being presented as a reading and the card shows
+   * the date it stopped instead.
+   *
+   * Sixty days. A gauge down for maintenance, or through a cold snap, still
+   * shows its last number with the Delayed flag — that is context worth
+   * keeping. A gauge pulled for the season, or decommissioned in 1997, does
+   * not: "8.4 cfs" under a date is read as the river's condition whatever
+   * badge sits beside it, and people decide whether to put a boat on the
+   * water with this.
+   *
+   * The figure is a judgement, not a measurement. The national picture has no
+   * natural break to aim at — 96% of gauges report within two days and the
+   * remaining 4% spread evenly across every duration from a week to a decade —
+   * so there is no point at which "an outage" becomes "a season". Sixty days
+   * covers a long outage while still demoting anything that is clearly a
+   * season or more; it changes what about 2.5% of gauges display.
+   */
+  var STALE_DAYS = 60;
+  // The narrowest a card may be squeezed before the row gives up and wraps.
+  // Below about this a reading and its unit stop fitting on one line.
+  var CELL_MIN = 200;
+  var FLAG = '__riverWidgetReady';
+  var MAX_SITES = 6;
+  var scopeSeq = 0;
+
+  /* -------------------------------------------------------- diagnostics */
+
+  /**
+   * Everything the widget says out loud is prefixed "[River Widget]" so a site
+   * owner told to search their console for it finds all of it and nothing
+   * else. Silence on failure was the old behaviour, and it left the person
+   * whose page had gone blank with nothing to go on.
+   */
+  var log = [];
+
+  function report(level, message, extra) {
+    log.push({ at: new Date().toISOString(), level: level, message: message, extra: extra || null });
+    if (log.length > 40) log.shift();
+    if (!window.console || typeof window.console[level] !== 'function') return;
+    var line = '[River Widget v' + VERSION + '] ' + message;
+    try {
+      if (extra === undefined || extra === null) window.console[level](line);
+      else window.console[level](line, extra);
+    } catch (e) { /* a console that throws is not our problem to solve */ }
+  }
+
+  /**
+   * Typed into the console by someone trying to work out why their page is
+   * blank, usually because a support page told them to. Prints what is on the
+   * page, what it asked for, and what went wrong.
+   */
+  function diagnose() {
+    var nodes = document.querySelectorAll(SELECTOR);
+    var out = {
+      version: VERSION,
+      api: API || '(none detected — the script may be self-hosted)',
+      embedsFound: nodes.length,
+      embeds: [],
+      recentMessages: log.slice(-15)
+    };
+    for (var i = 0; i < nodes.length; i++) {
+      var c = readConfig(nodes[i]);
+      out.embeds.push({
+        sites: c.sites,
+        rawSitesAttribute: nodes[i].getAttribute('data-sites')
+          || nodes[i].getAttribute('data-site') || '(missing)',
+        mounted: !!nodes[i][FLAG],
+        chart: c.chart, source: c.source, theme: c.theme,
+        metrics: c.metrics
+      });
+    }
+    if (!nodes.length) {
+      report('warn', 'No embeds found on this page. Check the element has class="riverwidget" '
+        + 'and that your CMS did not strip the data- attributes.');
+    }
+    try { window.console.log(JSON.stringify(out, null, 2)); } catch (e) { window.console.log(out); }
+    return out;
+  }
+
+  /* ------------------------------------------------------------- origin */
+
+  function apiOrigin() {
+    var override = document.querySelector('[data-river-api]');
+    if (override) return String(override.getAttribute('data-river-api')).replace(/\/+$/, '');
+    var scripts = document.getElementsByTagName('script');
+    for (var i = scripts.length - 1; i >= 0; i--) {
+      var src = scripts[i].src || '';
+      var at = src.indexOf('/v1/widget.js');
+      if (at > -1) return src.slice(0, at);
+    }
+    return '';
+  }
+  var API = apiOrigin();
+
+  /* ------------------------------------------------------------- themes */
+
+  var THEMES = {
+    river:  { bg:'#ffffff', fg:'#16233a', muted:'#63748f', line:'#dbe3ee', accent:'#1c6b8c', radius:'12px' },
+    slate:  { bg:'#f7f8fa', fg:'#1d2430', muted:'#646f85', line:'#dfe3ea', accent:'#3f5a76', radius:'10px' },
+    forest: { bg:'#ffffff', fg:'#152019', muted:'#5f7268', line:'#dae2dc', accent:'#2f6b46', radius:'12px' },
+    sand:   { bg:'#fbf8f3', fg:'#241d14', muted:'#7a6b57', line:'#e6dccc', accent:'#9a6b24', radius:'8px' },
+    night:  { bg:'#151d2b', fg:'#eaf0f8', muted:'#93a3ba', line:'#2c3a4f', accent:'#6fb6d4', radius:'12px' },
+    mono:   { bg:'#ffffff', fg:'#111111', muted:'#6b6b6b', line:'#e0e0e0', accent:'#111111', radius:'2px' },
+    bare:   { bg:'transparent', fg:'inherit', muted:'inherit', line:'currentColor', accent:'currentColor', radius:'0' }
+  };
+
+  /* -------------------------------------------------------------- utils */
+
+  function attr(el, name, fallback) {
+    var v = el.getAttribute('data-' + name);
+    return v === null || v === '' ? fallback : v;
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;';
+    });
+  }
+  function uniq(list) {
+    var seen = {}, out = [], i;
+    for (i = 0; i < list.length; i++) {
+      if (list[i] && !seen[list[i]]) { seen[list[i]] = 1; out.push(list[i]); }
+    }
+    return out;
+  }
+  function map(list, fn) {
+    var out = [], i;
+    for (i = 0; i < list.length; i++) out.push(fn(list[i], i));
+    return out;
+  }
+
+  /* --------------------------------------------------------- transport */
+
+  /**
+   * XHR rather than fetch: same code path back to IE10, and every platform
+   * that allows a script tag allows this. Callback-style so no Promise
+   * polyfill is needed either.
+   */
+  function getJSON(url, done, fail) {
+    var xhr;
+    if (typeof XMLHttpRequest !== 'undefined' && 'withCredentials' in new XMLHttpRequest()) {
+      xhr = new XMLHttpRequest();
+      xhr.open('GET', url, true);
+    } else if (typeof XDomainRequest !== 'undefined') {
+      xhr = new XDomainRequest(); // IE8/9 cross-origin
+      xhr.open('GET', url);
+    } else {
+      fail(new Error('no cors transport'));
+      return;
+    }
+
+    var settled = false;
+    function ok() {
+      if (settled) return;
+      settled = true;
+      var status = typeof xhr.status === 'number' ? xhr.status : 200;
+      if (status && (status < 200 || status >= 300)) { fail(new Error('http ' + status)); return; }
+      try { done(JSON.parse(xhr.responseText)); }
+      catch (e) { fail(e); }
+    }
+    function bad() {
+      if (settled) return;
+      settled = true;
+      fail(new Error('network'));
+    }
+
+    xhr.onload = ok;
+    xhr.onerror = bad;
+    xhr.ontimeout = bad;
+    xhr.onreadystatechange = function () { if (xhr.readyState === 4) ok(); };
+    xhr.timeout = 15000;
+    try { xhr.send(); } catch (e) { bad(); }
+  }
+
+  /* --------------------------------------------------------------- units */
+
+  var UNITS = {
+    us:     { flow:{ f:1,         u:'cfs',  d:0 }, stage:{ f:1,      u:'ft', d:2 }, temp:{ u:'°F', d:0 } },
+    metric: { flow:{ f:0.0283168, u:'m³/s', d:2 }, stage:{ f:0.3048, u:'m', d:2 }, temp:{ u:'°C', d:1 } }
+  };
+
+  function convert(kind, value, system) {
+    var spec = UNITS[system][kind];
+    if (kind === 'temp') {
+      return { n: system === 'us' ? value * 9 / 5 + 32 : value, u: spec.u, d: spec.d };
+    }
+    return { n: value * spec.f, u: spec.u, d: spec.d };
+  }
+
+  function fmt(n, decimals) {
+    var d = (n < 10 && decimals === 0) ? 1 : decimals;
+    try {
+      return Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+    } catch (e) {
+      // IE without full Intl: fixed decimals plus manual thousands separators.
+      var s = Number(n).toFixed(d).split('.');
+      s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      return s.join('.');
+    }
+  }
+
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  /**
+   * Break a reading's timestamp into calendar parts *in the gauge's own
+   * timezone*, which is the only timezone the number means anything in — a
+   * Montana flow stamped in the reader's Berlin evening is worse than no
+   * stamp at all.
+   *
+   * formatToParts is used rather than parsing a formatted string, because the
+   * shape of that string is a locale implementation detail and regexing it
+   * works right up until it does not. IE11 has no formatToParts and falls back
+   * to the browser's local time, which is the honest degradation: wrong zone,
+   * but a real time, and the zone label is then suppressed rather than lying.
+   */
+  function stampParts(iso, tz) {
+    // Safari and IE both choke on "+00:00" offsets in some versions.
+    var d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return null;
+    var out = {
+      mo: d.getMonth() + 1, d: d.getDate(), y: d.getFullYear(),
+      h: d.getHours(), mi: d.getMinutes(), zone: ''
+    };
+    if (!tz || typeof Intl === 'undefined' || !Intl.DateTimeFormat) return out;
+    try {
+      var f = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short'
+      });
+      if (!f.formatToParts) return out;
+      var list = f.formatToParts(d), i, t, pm = null;
+      for (i = 0; i < list.length; i++) {
+        t = list[i];
+        if (t.type === 'month') out.mo = +t.value;
+        else if (t.type === 'day') out.d = +t.value;
+        else if (t.type === 'year') out.y = +t.value;
+        else if (t.type === 'hour') out.h = +t.value;
+        else if (t.type === 'minute') out.mi = +t.value;
+        else if (t.type === 'dayPeriod') pm = /p/i.test(t.value);
+        else if (t.type === 'timeZoneName') out.zone = t.value;
+      }
+      // hour12 reports 1-12; put it back on a 24-hour clock for formatting.
+      if (pm !== null) out.h = (out.h % 12) + (pm ? 12 : 0);
+    } catch (e) { /* fall through to the browser's local time */ }
+    return out;
+  }
+
+  /**
+   * The reading time, in one of three lengths.
+   *
+   *   full     Sep 10, 8:00 AM PDT
+   *   compact  9/10/2026 - 8:00am PDT
+   *   minimal  9/10/26 - 8a PDT
+   *
+   * None of them is "off". A river reading with no time on it is the most
+   * dangerous thing this widget could render: the number looks equally
+   * confident whether it arrived four minutes ago or last Tuesday, and people
+   * decide whether to put a boat on the water with it.
+   */
+  function when(iso, tz, format, showZone) {
+    var p = stampParts(iso, tz);
+    if (!p) return '';
+    var h = p.h % 12; if (!h) h = 12;
+    var pm = p.h >= 12;
+    var mm = p.mi < 10 ? '0' + p.mi : String(p.mi);
+    var zone = (showZone !== false && p.zone) ? ' ' + p.zone : '';
+
+    if (format === 'minimal') {
+      return p.mo + '/' + p.d + '/' + String(p.y).slice(2) + ' - ' + h + (pm ? 'p' : 'a') + zone;
+    }
+    if (format === 'compact') {
+      return p.mo + '/' + p.d + '/' + p.y + ' - ' + h + ':' + mm + (pm ? 'pm' : 'am') + zone;
+    }
+    // The year only when it is not this one. "Sep 30, 11:00 PM" is unambiguous
+    // for a reading from this year and dangerously not for one from 1997,
+    // which is what a decommissioned gauge returns — a plausible flow figure
+    // under a date that reads as eleven days ago.
+    var yr = p.y === new Date().getFullYear() ? '' : ' ' + p.y;
+    return MONTHS[p.mo - 1] + ' ' + p.d + yr + ', ' + h + ':' + mm + ' ' + (pm ? 'PM' : 'AM') + zone;
+  }
+
+  /** "9/10/2026" in the gauge's own timezone, with an IE-safe fallback. */
+  function mdY(iso, tz) {
+    var d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return '';
+    if (tz) {
+      try {
+        return d.toLocaleDateString('en-US', {
+          month: 'numeric', day: 'numeric', year: 'numeric', timeZone: tz
+        });
+      } catch (e) { /* fall through to the manual format */ }
+    }
+    return (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear();
+  }
+
+  /* ----------------------------------------------------------- sparkline */
+
+  function sparkline(values, days) {
+    if (!values || values.length < 3) return '';
+    var w = 300, h = 40, lo = values[0], hi = values[0], i;
+    for (i = 1; i < values.length; i++) {
+      if (values[i] < lo) lo = values[i];
+      if (values[i] > hi) hi = values[i];
+    }
+    var span = (hi - lo) || 1, d = '', lx = 0, ly = 0;
+    for (i = 0; i < values.length; i++) {
+      var x = (i / (values.length - 1)) * w;
+      var y = h - 3 - ((values[i] - lo) / span) * (h - 6);
+      d += (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+      lx = x; ly = y;
+    }
+    d = d.replace(/\s+$/, '');
+    return '<svg class="rw-spark" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img"'
+      + ' aria-label="' + esc((days || values.length) + ' day trend of daily mean flow') + '">'
+      + '<path class="rw-fill" d="' + d + ' L' + w + ' ' + h + ' L0 ' + h + ' Z"/>'
+      + '<path class="rw-line" d="' + d + '"/>'
+      + '<circle class="rw-dot" cx="' + lx.toFixed(1) + '" cy="' + ly.toFixed(1) + '" r="3"/></svg>';
+  }
+
+
+  /* ---------------------------------------------------------- hydrograph */
+
+  /**
+   * "Nice" axis numbers (Heckbert). Picks a tick step of 1, 2 or 5 times a
+   * power of ten, so a stage axis lands on 2.0 / 2.2 / 2.4 rather than
+   * 1.877 / 2.131 / 2.385.
+   */
+  function niceNum(range, round) {
+    var exp = Math.floor(Math.log(range) / Math.LN10);
+    var frac = range / Math.pow(10, exp);
+    var nf;
+    if (round) nf = frac < 1.5 ? 1 : frac < 3 ? 2 : frac < 7 ? 5 : 10;
+    else nf = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+    return nf * Math.pow(10, exp);
+  }
+
+  /**
+   * A river axis never starts at zero. A gauge sitting between 1.9 and 3.2 ft
+   * plotted from zero is a flat line with a bump, and the whole reason anglers
+   * read this chart is the shape inside that 1.3 ft band.
+   *
+   * So: enumerate every 1/2/5 step that could cover the padded data range and
+   * score them. Around seven gridlines reads best, and a candidate that floors
+   * to zero when the river never goes near zero is penalised hard — that is
+   * the failure mode this whole function exists to avoid.
+   */
+  function axisTicks(lo, hi) {
+    if (!(hi > lo)) {
+      var nudge = Math.abs(lo || 1) * 0.05;
+      hi = lo + nudge; lo = lo - nudge;
+    }
+    var pad = (hi - lo) * 0.08;
+    var dLo = lo - pad, dHi = hi + pad;
+    // Flow is never negative, and neither is stage on all but a few gauges.
+    if (lo >= 0 && dLo < 0) dLo = 0;
+    var span = dHi - dLo;
+    var baseExp = Math.floor(Math.log(span) / Math.LN10) - 2;
+    var mults = [1, 2, 5];
+    var best = null, e, m;
+
+    for (e = baseExp; e <= baseExp + 4; e++) {
+      for (m = 0; m < mults.length; m++) {
+        var step = mults[m] * Math.pow(10, e);
+        var aLo = Math.floor(dLo / step) * step;
+        var aHi = Math.ceil(dHi / step) * step;
+        var n = Math.round((aHi - aLo) / step) + 1;
+        if (n < 4 || n > 12) continue;
+        if (aLo < 0 && lo >= 0) continue;
+
+        // What fraction of the chart's height the trace actually occupies.
+        // This is the number that decides whether the chart looks "zoomed in"
+        // the way the USGS hydrograph does, so it dominates the score.
+        var waste = 1 - (hi - lo) / (aHi - aLo);
+        var score = Math.abs(n - 7) * 0.5 + waste * 10;
+
+        // A zero floor under a river that never approaches zero throws away
+        // the bottom of the chart to say nothing.
+        if (aLo === 0 && lo > (hi - lo) * 0.15) score += 3;
+
+        if (!best || score < best.score) best = { step: step, lo: aLo, hi: aHi, n: n, score: score };
+      }
+    }
+    if (!best) best = { step: span / 4, lo: dLo, hi: dHi, n: 5 };
+
+    var dec = Math.max(0, -Math.floor(Math.log(best.step) / Math.LN10));
+    var out = [], i;
+    for (i = 0; i < best.n; i++) {
+      out.push(Number((best.lo + i * best.step).toFixed(dec + 2)));
+    }
+    return { values: out, decimals: dec };
+  }
+
+  function tickLabel(v, decimals) {
+    if (Math.abs(v) >= 1000) return fmt(v, 0);
+    return v.toFixed(decimals);
+  }
+
+  var SHORT_MONTHS = MONTHS;
+
+  /** "Sep 03" in the gauge's own timezone, with an IE-safe fallback. */
+  function dayLabel(epochSec, tz) {
+    var d = new Date(epochSec * 1000);
+    if (tz) {
+      try {
+        return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', timeZone: tz });
+      } catch (e) { /* fall through */ }
+    }
+    var dd = d.getDate();
+    return SHORT_MONTHS[d.getMonth()] + ' ' + (dd < 10 ? '0' + dd : dd);
+  }
+
+  /** Local midnights inside the window, for the day gridlines. */
+  function dayBoundaries(t0, t1, tz) {
+    var out = [], day = 86400;
+    // Walk back to the first midnight at or after t0. Working in whole days
+    // from a UTC midnight is close enough for tick placement; the labels
+    // themselves are formatted in the gauge's zone.
+    var first = Math.ceil(t0 / day) * day;
+    for (var t = first; t <= t1; t += day) out.push(t);
+    return out;
+  }
+
+  /**
+   * The chart most anglers already know: a real y-axis in the gauge's units,
+   * day labels along the bottom, and the 15-minute trace between them.
+   *
+   * Fixed viewBox with `meet` rather than the sparkline's `none`, because this
+   * one has text in it — stretching the box would stretch the numerals.
+   */
+  function hydrograph(series, cfg, tz) {
+    var pts = series && series.points;
+    if (!pts || pts.length < 3) return '';
+
+    var W = 560, H = 232, L = 48, R = 12, T = 12, B = 30;
+    var iw = W - L - R, ih = H - T - B;
+
+    var lo = pts[0][1], hi = pts[0][1], t0 = pts[0][0], t1 = pts[pts.length - 1][0], i;
+    for (i = 1; i < pts.length; i++) {
+      if (pts[i][1] < lo) lo = pts[i][1];
+      if (pts[i][1] > hi) hi = pts[i][1];
+    }
+
+    // Convert to display units before scaling, or the axis lies in metric.
+    var kind = series.param === 'stage' ? 'stage' : 'flow';
+    var cLo = convert(kind, lo, cfg.units), cHi = convert(kind, hi, cfg.units);
+    var unit = cLo.u;
+    var axis = axisTicks(cLo.n, cHi.n);
+    var aLo = axis.values[0], aHi = axis.values[axis.values.length - 1];
+    var aSpan = (aHi - aLo) || 1;
+    var tSpan = (t1 - t0) || 1;
+
+    var x = function (t) { return L + ((t - t0) / tSpan) * iw; };
+    var y = function (v) { return T + ih - ((v - aLo) / aSpan) * ih; };
+
+    var out = [];
+    // 'both' | 'horizontal' | 'vertical' | 'none'. The axis labels stay
+    // whatever the lines do — a chart without numbers is a sparkline.
+    var showH = cfg.gridlines === 'both' || cfg.gridlines === 'horizontal';
+    var showV = cfg.gridlines === 'both' || cfg.gridlines === 'vertical';
+
+    // Horizontal gridlines and their labels.
+    for (i = 0; i < axis.values.length; i++) {
+      var gv = axis.values[i], gy = y(gv).toFixed(1);
+      if (showH) {
+        out.push('<line class="rw-grid" x1="' + L + '" y1="' + gy + '" x2="' + (W - R) + '" y2="' + gy + '"/>');
+      }
+      out.push('<text class="rw-tick" x="' + (L - 7) + '" y="' + (y(gv) + 3.5).toFixed(1)
+        + '" text-anchor="end">' + esc(tickLabel(gv, axis.decimals)) + '</text>');
+    }
+
+    // Unit, rotated up the left edge, the way USGS labels theirs.
+    out.push('<text class="rw-unit-lbl" transform="translate(11,' + (T + ih / 2).toFixed(1)
+      + ') rotate(-90)" text-anchor="middle">' + esc(unit) + '</text>');
+
+    // Day boundaries.
+    var days = dayBoundaries(t0, t1, tz);
+    var everyNth = Math.ceil(days.length / 7);
+    for (i = 0; i < days.length; i++) {
+      var dx = x(days[i]);
+      if (dx < L + 4 || dx > W - R - 4) continue;
+      if (showV) {
+        out.push('<line class="rw-daygrid" x1="' + dx.toFixed(1) + '" y1="' + T
+          + '" x2="' + dx.toFixed(1) + '" y2="' + (T + ih) + '"/>');
+      }
+      if (i % everyNth === 0) {
+        out.push('<text class="rw-tick" x="' + dx.toFixed(1) + '" y="' + (H - 10)
+          + '" text-anchor="middle">' + esc(dayLabel(days[i], tz)) + '</text>');
+      }
+    }
+
+    // Axis rules.
+    out.push('<line class="rw-axis" x1="' + L + '" y1="' + T + '" x2="' + L + '" y2="' + (T + ih) + '"/>');
+    out.push('<line class="rw-axis" x1="' + L + '" y1="' + (T + ih) + '" x2="' + (W - R) + '" y2="' + (T + ih) + '"/>');
+
+    // The trace.
+    var d = '';
+    for (i = 0; i < pts.length; i++) {
+      d += (i ? 'L' : 'M') + x(pts[i][0]).toFixed(1) + ' '
+        + y(convert(kind, pts[i][1], cfg.units).n).toFixed(1) + ' ';
+    }
+    d = d.replace(/\s+$/, '');
+    out.push('<path class="rw-hline" d="' + d + '"/>');
+
+    var last = pts[pts.length - 1];
+    out.push('<circle class="rw-dot" cx="' + x(last[0]).toFixed(1) + '" cy="'
+      + y(convert(kind, last[1], cfg.units).n).toFixed(1) + '" r="3"/>');
+
+    var label = (kind === 'stage' ? 'Gauge height' : 'Streamflow') + ' over '
+      + series.days + ' day' + (series.days === 1 ? '' : 's') + ', in ' + unit;
+
+    return '<svg class="rw-hydro" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet"'
+      + ' role="img" aria-label="' + esc(label) + '">' + out.join('') + '</svg>';
+  }
+
+  /* --------------------------------------------------------------- style */
+
+  /**
+   * `scope` is ':host' in the Shadow DOM path and '.rw-sN' when rendering
+   * inline. Inline mode leans on !important for the handful of properties
+   * that aggressive site themes reach into.
+   */
+  function css(cfg, scope) {
+    var base = THEMES[cfg.theme] || THEMES.river;
+
+    // Per-element overrides on top of the theme. A widget usually has to sit
+    // inside a design that already exists, and "the theme is close but the
+    // card must be transparent and the border has to go" is the normal case,
+    // not an edge one.
+    var t = {
+      bg: cfg.bg || base.bg,
+      fg: cfg.text || base.fg,
+      muted: cfg.muted || base.muted,
+      line: cfg.border === 'none' ? 'transparent' : (cfg.border || base.line),
+      accent: base.accent,
+      radius: base.radius
+    };
+    var accent = cfg.accent || base.accent;
+    // The numerals are the thing people look at, so they get their own colour
+    // rather than inheriting body text. Gridlines likewise: a chart usually
+    // wants them fainter than the card's own border.
+    var value = cfg.value || t.fg;
+    var grid = cfg.grid || (cfg.border === 'none' ? (base.line) : t.line);
+    var radius = cfg.radius || base.radius;
+    var noBorder = cfg.border === 'none';
+    var d = cfg.density === 'compact'
+      ? { pad: '13px 15px', num: '30px', minor: '18px', gap: '18px', name: '11px', spark: '32px' }
+      : { pad: '18px 20px', num: '38px', minor: '21px', gap: '26px', name: '11.5px', spark: '40px' };
+    var shadow = scope === ':host';
+    var bang = shadow ? '' : ' !important';
+    var cols = /^[1-4]$/.test(String(cfg.columns)) ? cfg.columns : '';
+    var font = cfg.font === 'system'
+      ? '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif'
+      : 'inherit';
+
+    // font-size:inherit rather than 16px, so the card title can take the size
+    // of the surrounding page. On :host it has to come *after* all:initial,
+    // which resets font-size to medium and would otherwise pin the widget to
+    // 16px no matter what the page around it is set to. Every other size in
+    // here is an absolute px, so nothing else moves when the page moves.
+    var s = scope + '{display:block;font-family:' + font + ';color:' + t.fg + ';font-size:inherit;'
+      + 'line-height:1.5;text-align:left' + bang + ';box-sizing:border-box}'
+      + (shadow ? ':host{all:initial;display:block;font-family:' + font + ';color:' + t.fg + ';font-size:inherit;line-height:1.5}' : '')
+      + scope + ' *,' + scope + ' *::before,' + scope + ' *::after{box-sizing:border-box;margin:0;padding:0}'
+
+      // flexbox, not grid: identical result, and it does not strand IE11
+      + scope + ' .rw-grid{display:-webkit-box;display:-ms-flexbox;display:flex;'
+      + '-ms-flex-wrap:wrap;flex-wrap:wrap;margin:-7px}'
+      // A column count is a *maximum*, and it degrades on its own.
+      //
+      // The first attempt pinned each cell to an exact fraction and dropped to
+      // one column under a viewport media query. That was wrong twice over: a
+      // media query measures the viewport while this widget sizes to its
+      // container, so a three-column embed stayed three columns inside a 300px
+      // sidebar on a desktop screen — and the builder's own mobile preview,
+      // which narrows the container and not the window, never changed at all.
+      //
+      // Flex line-breaking uses each item's basis clamped by its min-width, so
+      // a percentage basis with a floor gives "at most N across, fewer when
+      // there is not room" with no breakpoints and nothing measuring the
+      // window. Percentages rather than calc(): IE11 miscomputes calc() in a
+      // flex-basis.
+      + (cols
+        ? scope + ' .rw-cell{-webkit-box-flex:1;-ms-flex:1 1 ' + (100 / cols).toFixed(4) + '%;'
+          + 'flex:1 1 ' + (100 / cols).toFixed(4) + '%;padding:7px;min-width:' + CELL_MIN + 'px}'
+        : scope + ' .rw-cell{-webkit-box-flex:1;-ms-flex:1 1 260px;flex:1 1 260px;padding:7px;min-width:0}')
+
+      + scope + ' .rw-card{background:' + t.bg + ';'
+      + (noBorder ? 'border:0;' : 'border:1px solid ' + t.line + ';')
+      + 'border-radius:' + radius + ';padding:' + d.pad + ';height:100%;'
+      // A column, so the footer can be pushed to the bottom. Cards in a row
+      // stretch to the tallest, and a block layout left the short one with its
+      // footer stranded halfway up and dead space underneath.
+      + 'display:-webkit-box;display:-ms-flexbox;display:flex;'
+      + '-webkit-box-orient:vertical;-webkit-box-direction:normal;'
+      + '-ms-flex-direction:column;flex-direction:column;overflow:hidden'
+      + (cfg.shadow === '1' ? ';box-shadow:0 1px 2px rgba(0,0,0,.05),0 8px 24px -14px rgba(0,0,0,.25)' : '')
+      + '}'
+      + scope + ' .rw-name{font-weight:700;letter-spacing:.08em;text-transform:uppercase;'
+      + 'color:' + t.muted + ';margin:0 0 12px' + bang + ';font-size:'
+      + (cfg.titleSize === 'small' ? d.name : 'inherit') + '}'
+      + scope + ' .rw-row{display:-webkit-box;display:-ms-flexbox;display:flex;-ms-flex-wrap:wrap;flex-wrap:wrap;'
+      + '-webkit-box-align:end;-ms-flex-align:end;align-items:flex-end}'
+      + scope + ' .rw-metric{margin:0 ' + d.gap + ' 6px 0}'
+      + scope + ' .rw-key{display:block;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;'
+      + 'color:' + t.muted + ';margin-bottom:3px}'
+      + scope + ' .rw-num{font-size:' + d.num + ';font-weight:700;line-height:1;letter-spacing:-.02em;'
+      + 'font-variant-numeric:tabular-nums;color:' + value + bang + '}'
+      + scope + ' .rw-minor .rw-num{font-size:' + d.minor + ';font-weight:600}'
+      + scope + ' .rw-u{font-size:13px;font-weight:600;color:' + t.muted + ';margin-left:3px}'
+      + scope + ' .rw-trend{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;'
+      + 'border-radius:999px;border:1px solid ' + t.line + ';color:' + t.muted + ';white-space:nowrap;margin:0 0 6px}'
+      + scope + ' .rw-trend.rw-up,' + scope + ' .rw-trend.rw-down{color:' + accent + ';border-color:' + accent + '}'
+      + scope + ' .rw-spark{display:block;width:100%;height:' + d.spark + ';margin:14px 0 0}'
+      + scope + ' .rw-hydro{display:block;width:100%;height:auto;margin:14px 0 0}'
+      + scope + ' .rw-nochart{margin:14px 0 0;font-size:12px;color:' + t.muted + ';line-height:1.5}'
+      + scope + ' .rw-grid{stroke:' + grid + ';stroke-width:1}'
+      + scope + ' .rw-daygrid{stroke:' + grid + ';stroke-width:1;stroke-dasharray:2 3}'
+      + scope + ' .rw-axis{stroke:' + grid + ';stroke-width:1}'
+      + scope + ' .rw-tick{fill:' + t.muted + ';font-size:11px;font-family:inherit}'
+      + scope + ' .rw-unit-lbl{fill:' + t.muted + ';font-size:11px;font-family:inherit}'
+      + scope + ' .rw-hline{fill:none;stroke:' + accent + ';stroke-width:1.8;'
+      + 'stroke-linejoin:round;stroke-linecap:round}'
+      + scope + ' .rw-line{fill:none;stroke:' + accent + ';stroke-width:2;stroke-linejoin:round;stroke-linecap:round}'
+      + scope + ' .rw-fill{fill:' + accent + ';opacity:.1;stroke:none}'
+      + scope + ' .rw-dot{fill:' + accent + '}'
+      + scope + ' .rw-gap{-webkit-box-flex:1;-ms-flex:1 1 auto;flex:1 1 auto;min-height:14px}'
+      // A wrapping flex row, so the footer is one line when there is room and
+      // breaks between its parts when there is not. It used to force a break
+      // after the provisional notice, which meant three lines on a card wide
+      // enough for one. Margins rather than gap: IE11 has flex-wrap but not
+      // gap, and the fallback there would be no spacing at all.
+      + scope + ' .rw-foot{margin:0;padding-top:10px;border-top:1px solid ' + t.line + ';'
+      + 'font-size:12px;color:' + t.muted + ';line-height:1.5;'
+      + 'display:-webkit-box;display:-ms-flexbox;display:flex;'
+      + '-ms-flex-wrap:wrap;flex-wrap:wrap;'
+      + '-webkit-box-align:baseline;-ms-flex-align:baseline;align-items:baseline;'
+      + '-ms-flex:none;flex:none}'
+      // Each part is one unit: it moves to the next line whole rather than
+      // splitting a date or a station number down the middle.
+      + scope + ' .rw-foot > span{margin:0 9px 0 0;white-space:nowrap}'
+      // The timestamp is one value and must not be split across a line break:
+      // "Updated 9/13/2026 -" with "9:15pm" stranded underneath reads as two
+      // broken things rather than one date. Everything after it may wrap, so
+      // the footer still fits a narrow card — it just breaks between the
+      // facts instead of through one.
+      // Two exceptions to that. Both are long enough that keeping them whole
+      // would push them past the edge of a narrow card rather than onto the
+      // next line — which is how the credit came to be clipped to "Sta…".
+      // Inside the credit only the station number and its icon stay together.
+      + scope + ' .rw-prov,' + scope + ' .rw-src{white-space:normal}'
+      + scope + ' .rw-foot a{color:inherit' + bang + ';text-decoration:underline}'
+      + scope + ' .rw-warn{color:' + accent + ';font-weight:600}'
+      // No flex gap here: IE11 has flexbox but not gap, and the footer is one
+      // of the few places the layout would visibly collapse without it.
+      + scope + ' .rw-src-label{margin:0 4px 0 6px;white-space:nowrap}'
+      + scope + ' .rw-station{white-space:nowrap}'
+      + scope + ' .rw-usgs{font-weight:700;letter-spacing:.04em;text-decoration:none' + bang + ';'
+      + 'border:1px solid ' + t.line + ';border-radius:3px;padding:1px 4px;font-size:11px}'
+      + scope + ' .rw-usgs:hover,' + scope + ' .rw-usgs:focus{border-color:' + t.muted + '}'
+      + scope + ' .rw-station{font-variant-numeric:tabular-nums;white-space:nowrap}'
+      // A border-colour change is not a focus indicator (WCAG 2.4.11). Modern
+      // browsers get a real ring here; IE11 has no :focus-visible and keeps the
+      // one the browser draws, which no rule in this file ever removes.
+      + scope + ' .rw-foot a:focus-visible,' + scope + ' .rw-badge a:focus-visible{'
+      + 'outline:2px solid ' + accent + ';outline-offset:2px;border-radius:2px}'
+      + scope + ' .rw-cached{color:' + t.muted + ';font-weight:600}'
+      // The badge sits outside the card, on the host page, whose background
+      // the widget cannot know. In the theme's muted colour at 70% it measured
+      // 2.6:1 on a light page — and the night theme's muted on a white page
+      // fails even at full strength. The page's own text colour is the one
+      // colour already known to read on that background.
+      + scope + ' .rw-badge{margin:8px 2px 0;text-align:right;font-size:12px;line-height:1.4}'
+      + scope + ' .rw-badge a{color:inherit;text-decoration:none}'
+      + scope + ' .rw-badge a:hover,' + scope + ' .rw-badge a:focus{text-decoration:underline}'
+      + scope + ' .rw-ext{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;'
+      + 'stroke-linejoin:round;vertical-align:-1px;margin-left:4px}'
+      // Visible to a screen reader, to nobody else. The clip/clip-path pair is
+      // deliberate: clip is deprecated but is what IE11 honours.
+      + scope + ' .rw-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;'
+      + 'overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap;border:0}'
+      + scope + ' .rw-msg{font-size:14px;margin:0 0 10px' + bang + '}'
+      + scope + ' .rw-skeleton .rw-num{color:' + t.line + '}';
+
+    return s;
+  }
+
+  /* -------------------------------------------------------------- render */
+
+  /**
+   * "a", "a and b", "a, b and c". The conjunction is a parameter because the
+   * two sentences below need different ones: the gauge reports none of what
+   * was asked for ("does not report flow or stage") but does publish all of
+   * what it lists ("it publishes stage and temperature").
+   */
+  function list(items, conj) {
+    if (items.length <= 1) return items[0] || '';
+    return items.slice(0, -1).join(', ') + ' ' + (conj || 'and') + ' ' + items[items.length - 1];
+  }
+
+  function metricEl(key, label, obs, system, minor) {
+    if (!obs) return '';
+    var c = convert(key, obs.v, system);
+    return '<div class="rw-metric' + (minor ? ' rw-minor' : '') + '">'
+      + '<span class="rw-key">' + esc(label) + '</span>'
+      + '<span class="rw-num">' + esc(fmt(c.n, c.d)) + '</span>'
+      + '<span class="rw-u">' + c.u + '</span></div>';
+  }
+
+  /**
+   * The classic box-with-an-arrow, and the words that make it mean something
+   * without sight. WCAG asks a link that opens a new context to say so; the
+   * icon is decoration and is hidden from assistive tech, so the visually
+   * hidden text carries it. Inline rather than a font or an image request —
+   * the widget has no dependencies and is not about to acquire one for this.
+   */
+  function extIcon() {
+    return '<svg class="rw-ext" viewBox="0 0 24 24" width="12" height="12" '
+      + 'aria-hidden="true" focusable="false">'
+      + '<path d="M14 3h7v7"/><path d="M21 3l-9 9"/>'
+      + '<path d="M19 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/></svg>';
+  }
+
+  /** The icon plus the words, for links whose visible text already reads well. */
+  function extLink() {
+    return extIcon() + '<span class="rw-sr">(opens in a new tab)</span>';
+  }
+
+  function cardHTML(g, cfg, label, source) {
+    var name = label || (g && g.name) || '';
+    var url = (g && g.url) || 'https://waterdata.usgs.gov/';
+    var show = cfg.metrics;
+
+    if (!g || !g.reporting) {
+      return '<div class="rw-cell"><div class="rw-card"><p class="rw-name">' + esc(name) + '</p>'
+        + '<p class="rw-msg">This gauge is not reporting right now.</p>'
+        + '<p class="rw-foot"><a href="' + esc(url) + '" target="_blank" rel="noopener nofollow">'
+        + 'Check the USGS station page' + extLink() + '</a></p></div></div>';
+    }
+
+    // A reading old enough that showing it as a number would mislead. USGS
+    // returns the last value a gauge ever produced, so a station retired
+    // decades ago still answers with a plausible-looking figure.
+    var latest = (g.obs.flow || g.obs.stage || g.obs.temp || {}).t;
+    var ageDays = latest
+      ? (new Date().getTime() - new Date(String(latest).replace(' ', 'T')).getTime()) / 864e5
+      : 0;
+    if (latest && ageDays > STALE_DAYS) {
+      var since = mdY(latest, cfg.tz || g.tz);
+      var months = Math.round(ageDays / 30);
+      return '<div class="rw-cell"><div class="rw-card"><p class="rw-name">' + esc(name) + '</p>'
+        + '<p class="rw-msg">No recent readings. This gauge last reported on '
+        + esc(since) + (ageDays > 300
+            ? ' — over ' + (ageDays > 730 ? Math.floor(ageDays / 365) + ' years' : 'a year') + ' ago.'
+            : ', about ' + months + ' month' + (months === 1 ? '' : 's') + ' ago.')
+        + ' Gauges are pulled for the winter, taken down for maintenance, and '
+        + 'sometimes retired.</p>'
+        + '<p class="rw-foot"><a href="' + esc(url) + '" target="_blank" rel="noopener nofollow">'
+        + 'Check the USGS station page' + extLink() + '</a></p></div></div>';
+    }
+
+    // Built before the card, because whether any of it came back decides
+    // whether there is a card to show at all.
+    var readings = '';
+    if (show.flow)  readings += metricEl('flow', 'Streamflow', g.obs.flow, cfg.units, false);
+    if (show.stage) readings += metricEl('stage', 'Gauge height', g.obs.stage, cfg.units, true);
+    if (show.temp)  readings += metricEl('temp', 'Water temp', g.obs.temp, cfg.units, true);
+
+    // The gauge is reporting, just not the thing this embed asked for. About a
+    // fifth of live USGS gauges publish stage and no flow, so a flow-only grid
+    // meets one sooner or later — and it used to render a card with a name, an
+    // empty body and a footer, explaining nothing. Say what it does publish
+    // instead: that is the sentence that tells someone what to change.
+    if (!readings) {
+      var asked = [];
+      if (show.flow)  asked.push('streamflow');
+      if (show.stage) asked.push('gauge height');
+      if (show.temp)  asked.push('water temperature');
+      var publishes = [];
+      if (g.obs.flow)  publishes.push('streamflow');
+      if (g.obs.stage) publishes.push('gauge height');
+      if (g.obs.temp)  publishes.push('water temperature');
+
+      return '<div class="rw-cell"><div class="rw-card"><p class="rw-name">' + esc(name) + '</p>'
+        + '<p class="rw-msg">This gauge does not report ' + esc(list(asked, 'or')) + '.'
+        + (publishes.length ? ' It publishes ' + esc(list(publishes, 'and')) + '.' : '')
+        + '</p>'
+        + '<p class="rw-foot"><a href="' + esc(url) + '" target="_blank" rel="noopener nofollow">'
+        + 'Check the USGS station page' + extLink() + '</a></p></div></div>';
+    }
+
+    var html = '<div class="rw-cell"><div class="rw-card"><p class="rw-name">' + esc(name)
+      + '</p><div class="rw-row">' + readings;
+
+    if (show.trend && g.trend) {
+      var d = g.trend.dir;
+      var arrow = d === 'up' ? '▲' : d === 'down' ? '▼' : '▬';
+      var word = d === 'up' ? 'Rising' : d === 'down' ? 'Falling' : 'Steady';
+      var pct = d === 'flat' ? '' : ' ' + Math.abs(Math.round(g.trend.pct)) + '%';
+      html += '<span class="rw-trend rw-' + d + '">' + arrow + ' ' + word + pct + ' ' + g.trend.hours + ' hr</span>';
+    }
+    html += '</div>';
+
+    var chartHtml = '';
+    if (cfg.chart === 'hydrograph') chartHtml = hydrograph(g.series, cfg, cfg.tz || g.tz);
+    else if (cfg.chart === 'spark') {
+      chartHtml = sparkline((g.series && g.series.points)
+        ? map(g.series.points, function (pt) { return pt[1]; })
+        : g.spark, cfg.chartDays);
+    }
+
+    // A chart was asked for and there is nothing to draw. Usually the gauge
+    // does not publish the parameter being charted — plotting streamflow on a
+    // stage-only gauge is the common case, and it left a blank space with a
+    // reading above it and no clue why. Say which, and say what it does have.
+    if (cfg.chart !== 'none' && !chartHtml) {
+      var want = cfg.chartParam === 'stage' ? 'gauge height' : 'streamflow';
+      var has = [];
+      if (g.obs.flow && cfg.chartParam !== 'flow') has.push('streamflow');
+      if (g.obs.stage && cfg.chartParam !== 'stage') has.push('gauge height');
+      chartHtml = '<p class="rw-nochart">No ' + esc(want) + ' record for this gauge'
+        + (has.length ? ' — it publishes ' + esc(list(has, 'and')) : '') + '.</p>';
+    }
+    html += chartHtml;
+
+    var newest = (g.obs.flow || g.obs.stage || g.obs.temp || {}).t;
+    var stale = newest && (new Date().getTime() - new Date(String(newest).replace(' ', 'T')).getTime()) > 3 * 3600e3;
+
+    // Absorbs whatever height this card has spare, so footers line up across a
+    // row of cards holding different numbers of readings.
+    html += '<div class="rw-gap"></div><p class="rw-foot">';
+    if (newest) {
+      html += '<span class="rw-when">Updated '
+        + esc(when(newest, cfg.tz || g.tz, cfg.timeFormat, cfg.tzLabel)) + '</span>';
+    }
+    if (stale) html += '<span class="rw-warn">Delayed — gauge has not reported recently</span>';
+    // Only when the direct read failed and these numbers came from our cache.
+    // A visitor has no idea what a "fallback" is, so the word says what it
+    // means for them: this is not straight from the gauge.
+    //
+    // It used to carry a date — "Cached data from 9/10/2026" — which came from
+    // the same timestamp as the "Updated" line immediately before it, so the
+    // date appeared twice on every card and wrapped the footer onto two lines.
+    // The recency question is already answered; this one only has to answer
+    // where the number came from.
+    if (source === 'cache') html += '<span class="rw-cached">Cached</span>';
+    // Closes the timestamp line, so "Updated …", any delayed or cached flag,
+    // and nothing else share it.
+    // USGS asks to be credited, and requires the provisional notice to travel
+    // with real-time readings. Both stay: see src/license.js.
+    html += '<span class="rw-prov">'
+      + (cfg.provisional === 'minimal' ? 'Provisional' : 'Provisional data, subject to revision.')
+      + '</span>';
+    // Credit, then the station this card is actually reading. Two links doing
+    // two jobs: the wordmark says whose data this is, the number says which
+    // gauge — which matters on a page showing eight of them, where a row of
+    // identical "U.S. Geological Survey" links tells a reader nothing.
+    //
+    // The wordmark is set in text rather than being the USGS identifier
+    // artwork. Crediting USGS by name is required; reproducing the agency's
+    // official identifier on a commercial site is a different thing, and it
+    // can read as endorsement.
+    html += '<span class="rw-src">'
+      + '<a class="rw-usgs" href="https://www.usgs.gov/" target="_blank" rel="noopener nofollow">'
+      + 'USGS<span class="rw-sr">U.S. Geological Survey (opens in a new tab)</span></a>';
+    if (cfg.station) {
+      html += (cfg.stationLabel ? '<span class="rw-src-label">Station ID:</span>' : ' ')
+      // The visible text is a bare number, and a screen-reader user tabbing
+      // through links hears only the link. So the hidden half supplies the
+      // context the shortened label no longer carries (WCAG 2.4.4), while the
+      // number stays first so the accessible name still begins with what is on
+      // screen (WCAG 2.5.3 — someone driving by voice says "click 12449950").
+      + '<a class="rw-station" href="' + esc(url) + '" target="_blank" rel="noopener nofollow">'
+      + esc(g.site) + extIcon()
+      + '<span class="rw-sr">USGS station page, opens in a new tab</span></a>';
+    }
+    html += '</span>';
+    html += '</p></div></div>';
+    return html;
+  }
+
+  function skeletonHTML(labels) {
+    return map(labels, function (l) {
+      return '<div class="rw-cell"><div class="rw-card rw-skeleton"><p class="rw-name">'
+        + esc(l || 'River gauge') + '</p><div class="rw-row"><div class="rw-metric">'
+        + '<span class="rw-key">Streamflow</span><span class="rw-num">———</span></div></div>'
+        + '<p class="rw-foot">Loading current conditions…</p></div></div>';
+    }).join('');
+  }
+
+  function errorHTML(sites, labels) {
+    return map(sites, function (s, i) {
+      return '<div class="rw-cell"><div class="rw-card"><p class="rw-name">'
+        + esc(labels[i] || ('USGS ' + s)) + '</p>'
+        + '<p class="rw-msg">Live river conditions are temporarily unavailable.</p>'
+        + '<p class="rw-foot"><a href="https://waterdata.usgs.gov/monitoring-location/USGS-' + esc(s)
+        + '/" target="_blank" rel="noopener nofollow">View current flow at USGS station '
+        + esc(s) + extLink() + '</a>'
+        + '</p></div></div>';
+    }).join('');
+  }
+
+  /* --------------------------------------------------------------- parse */
+
+  function readConfig(el) {
+    var raw = attr(el, 'river-sites', attr(el, 'river-site', attr(el, 'sites', attr(el, 'site', ''))));
+    var candidates = uniq(map(String(raw).split(','), function (s) {
+      return s.replace(/^USGS-/i, '').replace(/^\s+|\s+$/g, '');
+    }));
+    var clean = [];
+    for (var i = 0; i < candidates.length; i++) {
+      if (/^\d{8,15}$/.test(candidates[i])) clean.push(candidates[i]);
+    }
+    clean = clean.slice(0, MAX_SITES);
+
+    var labels = map(String(attr(el, 'labels', attr(el, 'label_1', attr(el, 'label', '')))).split('|'),
+      function (s) { return s.replace(/^\s+|\s+$/g, ''); });
+
+    var list = String(attr(el, 'metrics', 'flow,stage,trend,spark')).toLowerCase();
+    var metrics = {
+      flow:  list.indexOf('flow') > -1,
+      stage: list.indexOf('stage') > -1,
+      temp:  list.indexOf('temp') > -1,
+      trend: list.indexOf('trend') > -1,
+      spark: list.indexOf('spark') > -1
+    };
+
+    // `data-chart` is the current control. Embeds written before it existed
+    // said "spark" in data-metrics instead, so that still decides the default.
+    var chart = String(attr(el, 'chart', metrics.spark ? 'spark' : 'none')).toLowerCase();
+    if (chart === 'hydro') chart = 'hydrograph';
+    if (chart !== 'spark' && chart !== 'hydrograph') chart = 'none';
+
+    var chartParam = attr(el, 'chart-param', 'flow') === 'stage' ? 'stage' : 'flow';
+    var maxDays = chart === 'hydrograph' ? 14 : 60;
+    var chartDays = parseInt(attr(el, 'chart-days', chart === 'hydrograph' ? '7' : '14'), 10);
+    if (!chartDays || chartDays < 1) chartDays = chart === 'hydrograph' ? 7 : 14;
+    if (chartDays > maxDays) chartDays = maxDays;
+
+    return {
+      sites: clean,
+      labels: labels,
+      theme: attr(el, 'theme', 'river'),
+      accent: attr(el, 'accent', ''),
+      radius: attr(el, 'radius', ''),
+      bg: attr(el, 'bg', ''),
+      text: attr(el, 'text', ''),
+      value: attr(el, 'value-color', ''),
+      muted: attr(el, 'muted', ''),
+      border: attr(el, 'border', ''),
+      grid: attr(el, 'grid-color', ''),
+      gridlines: (function () {
+        var g = String(attr(el, 'gridlines', 'both')).toLowerCase();
+        return g === 'horizontal' || g === 'vertical' || g === 'none' ? g : 'both';
+      })(),
+      shadow: attr(el, 'shadow', '0'),
+      density: attr(el, 'density', 'comfortable'),
+      font: attr(el, 'font', 'inherit'),
+      units: attr(el, 'units', 'us') === 'metric' ? 'metric' : 'us',
+      tz: attr(el, 'tz', ''),
+      source: attr(el, 'source', 'usgs'),
+      beacon: attr(el, 'beacon', '1'),
+      badge: attr(el, 'badge', '1'),
+      columns: String(attr(el, 'columns', '')),
+      titleSize: String(attr(el, 'title-size', '')).toLowerCase() === 'small' ? 'small' : 'inherit',
+      // Footer controls. Everything here adjusts how much of the footer is
+      // said, never whether the reading is dated or flagged provisional —
+      // see the comment on when() and src/license.js for why those two have
+      // no "off".
+      timeFormat: (function (v) {
+        return v === 'compact' || v === 'minimal' ? v : 'full';
+      })(String(attr(el, 'time-format', 'full')).toLowerCase()),
+      tzLabel: attr(el, 'tz-label', '1') !== '0',
+      provisional: String(attr(el, 'provisional', 'short')).toLowerCase() === 'minimal'
+        ? 'minimal' : 'short',
+      station: attr(el, 'station', '1') !== '0',
+      stationLabel: attr(el, 'station-label', '1') !== '0',
+      metrics: metrics,
+      chart: chart,
+      chartDays: chartDays,
+      chartParam: chartParam,
+      refresh: parseInt(attr(el, 'refresh', '900'), 10) || 0
+    };
+  }
+
+  /* --------------------------------------------------- direct from USGS */
+
+  /**
+   * Read the gauges straight from api.waterdata.usgs.gov, in the visitor's
+   * own browser.
+   *
+   * This is the default, and the reason is correctness before cost. An angler
+   * checks the flow here and then checks it on waterdata.usgs.gov or a river
+   * app; if our number is fifteen minutes behind theirs, the site looks wrong
+   * and the lodge loses the argument. Going direct means the number shown is
+   * the number USGS is serving, by definition.
+   *
+   * It also removes us as a single point of failure — an outage on our side
+   * cannot freeze every site running the widget — and the quota is the
+   * visitor's own 1,000/hour rather than one bucket shared by every embed on
+   * the internet. USGS sends Access-Control-Allow-Origin: *, so this needs no
+   * key, no proxy and no server.
+   */
+
+  var PARAM = { flow: '00060', stage: '00065', temp: '00010' };
+  var CODE = { '00060': 'flow', '00065': 'stage', '00010': 'temp' };
+
+  function usgsUrl(collection, params) {
+    var qs = ['f=json'];
+    for (var k in params) {
+      if (params.hasOwnProperty(k) && params[k] !== null && params[k] !== '') {
+        qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]));
+      }
+    }
+    return USGS + '/' + collection + '/items?' + qs.join('&');
+  }
+
+  function ids(sites) {
+    return map(sites, function (s) { return 'USGS-' + s; }).join(',');
+  }
+  function bare(id) { return String(id || '').replace(/^USGS-/, ''); }
+
+  /**
+   * USGS stores most station names in capitals. The builder bakes a tidied
+   * name into the embed, so this only runs for hand-written embeds that left
+   * data-labels off. Names already in mixed case are left alone.
+   */
+  var SMALL = { at: 1, near: 1, above: 1, below: 1, of: 1, the: 1, and: 1, to: 1, nr: 1, ab: 1, bl: 1 };
+  function titleCase(name) {
+    if (!name || /[a-z]/.test(name)) return name || '';
+    return name.toLowerCase().replace(/[a-z]+/g, function (w, at) {
+      if (at > 0 && SMALL[w]) return w;
+      return w.charAt(0).toUpperCase() + w.slice(1);
+    }).replace(/\b(us|sf|nf|ef|wf|mf|rm)\b/gi, function (m) { return m.toUpperCase(); })
+      // Case-insensitive: by this point the word has already been
+      // capitalised, so a lowercase-only pattern would never match and every
+      // station would read "Clearwater, Wa".
+      .replace(/,\s*([A-Za-z]{2})\.?$/, function (m, st) { return ', ' + st.toUpperCase(); });
+  }
+  function isoAt(ms) { return new Date(ms).toISOString().slice(0, 19) + 'Z'; }
+  function dayAt(ms) { return new Date(ms).toISOString().slice(0, 10); }
+  function toNum(v) {
+    if (v === null || v === undefined || v === '') return null;
+    var n = Number(v);
+    return isFinite(n) ? n : null;
+  }
+
+  /**
+   * Largest-Triangle-Three-Buckets. A week of 15-minute readings is ~670
+   * points; plain decimation drops whichever sample sits on the flood peak,
+   * which is the one thing the chart exists to show.
+   */
+  function lttb(data, target) {
+    var n = data.length, i;
+    if (target >= n || target < 3) return data;
+    var every = (n - 2) / (target - 2), out = [data[0]], a = 0;
+
+    for (i = 0; i < target - 2; i++) {
+      var sn = Math.floor((i + 1) * every) + 1;
+      var en = Math.min(Math.floor((i + 2) * every) + 1, n);
+      var ax = 0, ay = 0, j;
+      for (j = sn; j < en; j++) { ax += data[j][0]; ay += data[j][1]; }
+      var span = Math.max(en - sn, 1); ax /= span; ay /= span;
+
+      var st = Math.floor(i * every) + 1, e2 = Math.floor((i + 1) * every) + 1;
+      var px = data[a][0], py = data[a][1], best = st, bestArea = -1;
+      for (j = st; j < Math.min(e2, n); j++) {
+        var area = Math.abs((px - ax) * (data[j][1] - py) - (px - data[j][0]) * (ay - py));
+        if (area > bestArea) { bestArea = area; best = j; }
+      }
+      out.push(data[best]); a = best;
+    }
+    out.push(data[n - 1]);
+    return out;
+  }
+
+  /** Run several requests, calling back once with whatever succeeded. */
+  function all(jobs, done) {
+    var left = jobs.length, results = new Array(left);
+    if (!left) { done(results); return; }
+    map(jobs, function (job, i) {
+      job(function (value) {
+        results[i] = value;
+        if (--left === 0) done(results);
+      });
+    });
+  }
+
+  /**
+   * A secondary read that must not take the whole card down on its own — but
+   * whose failure still has to be visible.
+   *
+   * It used to swallow every error and return null, which meant a rate-limited
+   * chart request produced a card with numbers and no chart: no warning, no
+   * diagnostic, and no fallback, because the primary read had succeeded and
+   * the widget therefore believed the direct path was fine. The visible
+   * symptom was a chart that came and went between refreshes.
+   *
+   * `onFail` separates the two cases the caller genuinely needs apart: a gauge
+   * that publishes no chart data (empty result, perfectly normal, render
+   * nothing) and a request that failed (render nothing *and* say so).
+   */
+  function getSoft(url, cb, onFail) {
+    getJSON(url, cb, function (err) {
+      if (onFail) onFail(err);
+      cb(null);
+    });
+  }
+
+  function fetchDirect(cfg, done, fail) {
+    var now = new Date().getTime();
+    var idList = ids(cfg.sites);
+    var wantChart = cfg.chart !== 'none';
+    var chartCode = PARAM[cfg.chartParam] || PARAM.flow;
+    // Reads that were asked for and did not arrive. Names are excluded: a
+    // missing label degrades to the site number, which is legible, whereas a
+    // missing chart is a hole where a chart should be.
+    var lost = [];
+
+    var jobs = [
+      function (cb) {
+        getJSON(usgsUrl('latest-continuous', {
+          monitoring_location_id: idList,
+          parameter_code: PARAM.flow + ',' + PARAM.stage + ',' + PARAM.temp,
+          limit: 500
+        }), cb, function () { cb(null); });
+      },
+      function (cb) {
+        if (!cfg.metrics.trend) { cb(null); return; }
+        getSoft(usgsUrl('continuous', {
+          monitoring_location_id: idList,
+          parameter_code: PARAM.flow,
+          datetime: isoAt(now - 6 * 3600e3) + '/' + isoAt(now),
+          limit: 2000, sortby: 'time'
+        }), cb, function (err) { lost.push('trend (' + (err && err.message || 'failed') + ')'); });
+      },
+      function (cb) {
+        if (!wantChart) { cb(null); return; }
+        if (cfg.chart === 'hydrograph') {
+          getSoft(usgsUrl('continuous', {
+            monitoring_location_id: idList,
+            parameter_code: chartCode,
+            datetime: isoAt(now - cfg.chartDays * 864e5) + '/' + isoAt(now),
+            limit: 12000, sortby: 'time'
+          }), cb, function (err) { lost.push('chart (' + (err && err.message || 'failed') + ')'); });
+        } else {
+          getSoft(usgsUrl('daily', {
+            monitoring_location_id: idList,
+            parameter_code: chartCode,
+            statistic_id: '00003',
+            datetime: dayAt(now - cfg.chartDays * 864e5) + '/' + dayAt(now),
+            limit: 2000, sortby: 'time'
+          }), cb, function (err) { lost.push('chart (' + (err && err.message || 'failed') + ')'); });
+        }
+      },
+      function (cb) {
+        // Only needed when the embed did not bake in its own labels, which
+        // the builder always does.
+        var named = 0, i;
+        for (i = 0; i < cfg.sites.length; i++) if (cfg.labels[i]) named++;
+        if (named >= cfg.sites.length) { cb(null); return; }
+        getSoft(usgsUrl('monitoring-locations', { id: idList, limit: 100 }), cb);
+      }
+    ];
+
+    all(jobs, function (res) {
+      var latest = res[0], recent = res[1], chart = res[2], meta = res[3];
+      if (!latest || !latest.features) { fail(new Error('no data')); return; }
+      // The primary read landed but something asked for did not. Rendering
+      // this would be a card with a hole in it and nothing to explain the
+      // hole, so it goes to the fallback instead — which reads through our
+      // API, with a key, and usually returns the missing piece.
+      if (lost.length) { fail(new Error('partial read: ' + lost.join(', '))); return; }
+
+      var obs = {}, trendSeries = {}, chartRaw = {}, names = {}, unit = '', i, p, v, site;
+
+      for (i = 0; i < latest.features.length; i++) {
+        p = latest.features[i].properties;
+        v = toNum(p.value);
+        if (v === null || !CODE[p.parameter_code]) continue;
+        site = bare(p.monitoring_location_id);
+        if (!obs[site]) obs[site] = {};
+        obs[site][CODE[p.parameter_code]] = { v: v, u: p.unit_of_measure, t: p.time };
+      }
+
+      if (recent && recent.features) {
+        for (i = 0; i < recent.features.length; i++) {
+          p = recent.features[i].properties;
+          v = toNum(p.value);
+          if (v === null) continue;
+          site = bare(p.monitoring_location_id);
+          (trendSeries[site] = trendSeries[site] || []).push(v);
+        }
+      }
+
+      if (chart && chart.features) {
+        for (i = 0; i < chart.features.length; i++) {
+          p = chart.features[i].properties;
+          v = toNum(p.value);
+          if (v === null) continue;
+          if (!unit) unit = p.unit_of_measure || '';
+          var raw = p.time.length <= 10 ? p.time + 'T12:00:00Z' : p.time;
+          var t = new Date(raw).getTime();
+          if (isNaN(t)) continue;
+          site = bare(p.monitoring_location_id);
+          (chartRaw[site] = chartRaw[site] || []).push([Math.round(t / 1000), v]);
+        }
+      }
+
+      if (meta && meta.features) {
+        for (i = 0; i < meta.features.length; i++) {
+          p = meta.features[i].properties;
+          names[p.monitoring_location_number] = titleCase(p.monitoring_location_name);
+        }
+      }
+
+      var gauges = map(cfg.sites, function (s) {
+        var o = obs[s] || {}, ts = trendSeries[s] || [], tr = null;
+        if (ts.length > 3 && ts[0]) {
+          var pct = ((ts[ts.length - 1] - ts[0]) / ts[0]) * 100;
+          tr = { dir: pct > 2 ? 'up' : pct < -2 ? 'down' : 'flat', pct: Math.round(pct * 10) / 10, hours: 6 };
+        }
+        var pts = lttb(chartRaw[s] || [], cfg.chart === 'hydrograph' ? 260 : 60);
+        var hasObs = false;
+        for (var k in o) { if (o.hasOwnProperty(k)) { hasObs = true; break; } }
+        return {
+          site: s,
+          name: names[s] || ('USGS ' + s),
+          url: 'https://waterdata.usgs.gov/monitoring-location/USGS-' + s + '/',
+          obs: o,
+          trend: tr,
+          spark: map(pts, function (pt) { return pt[1]; }),
+          series: wantChart ? {
+            param: cfg.chartParam, unit: unit, days: cfg.chartDays,
+            resolution: cfg.chart === 'hydrograph' ? 'continuous' : 'daily', points: pts
+          } : null,
+          reporting: hasObs
+        };
+      });
+
+      done({ gauges: gauges, source: 'usgs' });
+    });
+  }
+
+  /* ---------------------------------------------------------------- boot */
+
+  var pending = {};   // url -> [callbacks]  (two widgets, one request)
+  var results = {};   // url -> payload
+
+  function proxyUrl(cfg) {
+    return API + '/api/v1/gauge?sites=' + cfg.sites.join(',')
+      + '&chart=' + cfg.chart
+      + '&days=' + cfg.chartDays
+      + '&param=' + cfg.chartParam
+      + '&trend=' + (cfg.metrics.trend ? 1 : 0);
+  }
+
+  /**
+   * Where the numbers come from, widest rung first:
+   *
+   *   1. USGS directly, from the visitor's browser. The default. The reading
+   *      shown is the reading USGS is serving, so it matches waterdata.usgs.gov
+   *      and every river app to the minute.
+   *   2. Our cached API, if the direct call fails — a corporate proxy blocking
+   *      the request, or USGS having a bad minute. Up to fifteen minutes
+   *      behind, which beats a blank card.
+   *   3. The anchor, which was a working link to the station all along.
+   *
+   * `data-source="proxy"` pins it to our API for anyone who would rather have
+   * one cached origin than the freshest number.
+   */
+  function loadGauges(cfg, done, fail) {
+    var url = (cfg.source === 'proxy' ? 'proxy:' : 'direct:') + proxyUrl(cfg);
+
+    if (results[url]) { done(results[url]); return; }
+    if (pending[url]) { pending[url].push([done, fail]); return; }
+    pending[url] = [[done, fail]];
+
+    var settle = function (data) {
+      results[url] = data;
+      setTimeout(function () { delete results[url]; }, 300000);
+      var waiters = pending[url]; delete pending[url];
+      for (var i = 0; i < waiters.length; i++) waiters[i][0](data);
+    };
+    var giveUp = function (err) {
+      var waiters = pending[url] || []; delete pending[url];
+      for (var i = 0; i < waiters.length; i++) waiters[i][1](err);
+    };
+
+    if (cfg.source !== 'proxy') {
+      fetchDirect(cfg, settle, function (err) {
+        report('warn', 'Could not reach the USGS API directly (' + (err && err.message || 'unknown')
+          + ') for gauges ' + cfg.sites.join(', ') + '. Falling back to the cached copy, which '
+          + 'may be up to 15 minutes old. A blocked request here is usually a network filter, an '
+          + 'ad blocker, or a content security policy on this page.', { gauges: cfg.sites });
+        if (!API) {
+          giveUp(new Error('USGS unreachable and no fallback configured'));
+          return;
+        }
+        getJSON(proxyUrl(cfg), function (d) {
+          d.source = 'cache';
+          report('info', 'Showing cached readings from the fallback API.');
+          settle(d);
+        }, function (err2) {
+          report('error', 'Both the USGS API and the fallback are unreachable, so no readings '
+            + 'can be shown for gauges ' + cfg.sites.join(', ') + ' (' + (err2 && err2.message
+            || 'unknown error') + '). The embed has been left as a link to the USGS station page.',
+            { gauges: cfg.sites, error: err2 && err2.message });
+          giveUp(err2);
+        });
+      });
+      return;
+    }
+
+    legacyLoad(proxyUrl(cfg), settle, giveUp);
+  }
+
+  /**
+   * Read through our API because the embed asked to, not because anything
+   * failed. That distinction reaches the card: `cache` means the direct read
+   * broke and we caught it, and says so; `proxy` means this is the chosen
+   * architecture working normally, and says nothing. Both are equally cached;
+   * only one of them is news.
+   */
+  function legacyLoad(url, settle, giveUp) {
+    getJSON(url, function (data) {
+      data.source = 'proxy';
+      settle(data);
+    }, giveUp);
+  }
+
+  /**
+   * Tell us a widget rendered. One request, no cookie, no visitor identifier,
+   * nothing about the page beyond the domain the browser already sends. It
+   * exists because going direct to USGS means we no longer see renders as a
+   * side effect of serving the data, and an install count that only works by
+   * being in the data path is not worth being in the data path for.
+   */
+  var beaconed = false;
+  function beacon(cfg, source) {
+    if (beaconed || !API || cfg.beacon === '0') return;
+    beaconed = true;
+    try {
+      var img = new Image();
+      img.referrerPolicy = 'origin';
+      img.src = API + '/api/v1/beacon?sites=' + cfg.sites.join(',')
+        + '&chart=' + cfg.chart + '&theme=' + encodeURIComponent(cfg.theme)
+        + '&src=' + encodeURIComponent(source || 'usgs')
+        + '&t=' + new Date().getTime();
+    } catch (e) { /* counting is never worth an error */ }
+  }
+
+  /**
+   * Say what this is, once per page.
+   *
+   * The audience is whoever has opened the console to find out what is
+   * rendering the river numbers — a developer who inherited the site, someone
+   * auditing third-party code, an agent reading the page. All of them would
+   * otherwise have to work backwards from a shadow root. One line, not a
+   * banner, and silent when branding is turned off.
+   */
+  var announced = false;
+  function announce() {
+    if (announced) return;
+    announced = true;
+    try {
+      if (window.console && console.log) {
+        console.log('River Widget v' + VERSION + ' — live USGS river conditions. '
+          + 'Docs and builder: https://riverwidget.com');
+      }
+    } catch (e) { /* a console that throws is not our problem to solve */ }
+  }
+
+  function mount(el) {
+    if (el[FLAG]) return;
+    el[FLAG] = true;
+
+    var cfg = readConfig(el);
+    if (!cfg.sites.length) {
+      var got = el.getAttribute('data-sites') || el.getAttribute('data-site') || '(attribute missing)';
+      // The value goes in the message text, not only in the detail object.
+      // People are asked to copy console output and send it on, and a detail
+      // object copies as "[object Object]".
+      report('warn', 'An embed has no usable USGS site number, so nothing was rendered. '
+        + 'Got: "' + got + '". Expected 8 to 15 digits, for example data-sites="12041200".',
+        { got: got, element: el.className || el.tagName });
+      return;
+    }
+
+    var host = document.createElement('div');
+    host.className = 'riverwidget-host';
+    host.setAttribute('aria-live', 'polite');
+    // Identity goes on the host, not inside the widget: the card lives in a
+    // shadow root, and a shadow root is exactly what an outside querySelector,
+    // a crawler, or someone auditing a page they inherited cannot see into.
+    host.id = 'river-widget-' + (++hostSeq);
+    host.setAttribute('data-riverwidget', VERSION);
+    el.parentNode.insertBefore(host, el);
+
+    // The anchor stays in the DOM as the no-JavaScript fallback and as an
+    // accessible link to the source data. Hidden, never removed.
+    el.style.display = 'none';
+
+    var grid, root = null;
+    if (host.attachShadow) {
+      root = host.attachShadow({ mode: 'open' });
+      var style = document.createElement('style');
+      style.appendChild(document.createTextNode(css(cfg, ':host')));
+      grid = document.createElement('div');
+      grid.className = 'rw-grid';
+      root.appendChild(style);
+      root.appendChild(grid);
+    } else {
+      var scope = 'rw-s' + (++scopeSeq);
+      host.className += ' ' + scope;
+      var tag = document.createElement('style');
+      tag.type = 'text/css';
+      var rules = css(cfg, '.' + scope);
+      if (tag.styleSheet) tag.styleSheet.cssText = rules;   // IE
+      else tag.appendChild(document.createTextNode(rules));
+      (document.head || document.getElementsByTagName('head')[0]).appendChild(tag);
+      grid = document.createElement('div');
+      grid.className = 'rw-grid';
+      host.appendChild(grid);
+    }
+
+    // One badge per widget, not per card: a page showing eight rivers should
+    // say where this came from once, not eight times. It sits with the cards
+    // inside the shadow root so the host page's stylesheet cannot restyle it
+    // into invisibility by accident.
+    if (cfg.badge !== '0') {
+      var badge = document.createElement('div');
+      badge.className = 'rw-badge';
+      badge.innerHTML = '<a href="https://riverwidget.com/?ref=badge" target="_blank" '
+        + 'rel="noopener">River Widget' + extLink() + '</a>';
+      (root || host).appendChild(badge);
+      announce();
+    }
+
+    grid.innerHTML = skeletonHTML(map(cfg.sites, function (s, i) { return cfg.labels[i]; }));
+
+    function paint() {
+      loadGauges(cfg, function (data) {
+        var bySite = {}, list = data.gauges || [], i;
+        for (i = 0; i < list.length; i++) bySite[list[i].site] = list[i];
+        var silent = [];
+        for (var k = 0; k < cfg.sites.length; k++) {
+          var g = bySite[cfg.sites[k]];
+          if (!g) silent.push(cfg.sites[k] + ' (not returned by USGS — check the site number)');
+          else if (!g.reporting) silent.push(cfg.sites[k] + ' (no current reading — the gauge may be '
+            + 'seasonal, offline, or down for maintenance)');
+        }
+        if (silent.length) {
+          report('warn', 'Some gauges have no current reading: ' + silent.join(', ')
+            + '. This is usually the gauge, not the widget — open the station page to confirm.');
+        }
+        grid.innerHTML = map(cfg.sites, function (s, idx) {
+          return cardHTML(bySite[s], cfg, cfg.labels[idx], data.source);
+        }).join('');
+        emitHeight();
+        beacon(cfg, data.source);
+      }, function () {
+        grid.innerHTML = errorHTML(cfg.sites, cfg.labels);
+        emitHeight();
+        beacon(cfg, 'error');
+      });
+    }
+
+    // In iframe mode the embed page tells its parent how tall it needs to be.
+    function emitHeight() {
+      if (window.parent === window || !window.postMessage) return;
+      setTimeout(function () {
+        try {
+          var h = document.documentElement.scrollHeight;
+          window.parent.postMessage({ type: 'riverwidget:height', height: h, version: VERSION }, '*');
+        } catch (e) { /* cross-origin parent that does not want to listen */ }
+      }, 60);
+    }
+
+    // The beacon fires from inside paint(), not here: at mount we do not yet
+    // know whether the numbers will come from USGS or from our cache, and
+    // which of those it was is the whole point of sending it.
+    paint();
+    if (cfg.refresh >= 300) setInterval(paint, cfg.refresh * 1000);
+  }
+
+  function scan() {
+    var nodes = document.querySelectorAll(SELECTOR);
+    for (var i = 0; i < nodes.length; i++) mount(nodes[i]);
+  }
+
+  function start() {
+    scan();
+    // Page builders (Elementor popups, tabs, AJAX loads, SPA route changes)
+    // inject markup after load. Re-scan cheaply rather than making people
+    // call an init function.
+    if (window.MutationObserver) {
+      var t = null;
+      new MutationObserver(function () {
+        if (t) clearTimeout(t);
+        t = setTimeout(scan, 150);
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    } else {
+      var n = 0;
+      var poll = setInterval(function () { scan(); if (++n > 20) clearInterval(poll); }, 500);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    if (document.addEventListener) document.addEventListener('DOMContentLoaded', start);
+    else document.attachEvent('onreadystatechange', function () {
+      if (document.readyState === 'complete') start();
+    });
+  } else {
+    start();
+  }
+
+  window.RiverWidget = {
+    scan: scan,
+    diagnose: diagnose,
+    // Internal, exposed so the direct-from-USGS path — now the primary data
+    // path — can be exercised by the test suite rather than only in a browser.
+    _direct: fetchDirect,
+    _card: cardHTML,
+    _css: css,
+    themes: (function () { var k = [], n; for (n in THEMES) if (THEMES.hasOwnProperty(n)) k.push(n); return k; })(),
+    version: VERSION
+  };
+})();

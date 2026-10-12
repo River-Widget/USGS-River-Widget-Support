@@ -1,5 +1,5 @@
 /*!
- * USGS River Widget v2.6.1 — embeddable live river conditions
+ * USGS River Widget v2.6.2 — embeddable live river conditions
  * MIT licensed. Free for personal and commercial use. No sign-up, no API key.
  * Data courtesy of the U.S. Geological Survey (U.S. public domain).
  * Provisional USGS data, subject to revision — waterdata.usgs.gov/provisional-data-statement/
@@ -27,7 +27,7 @@
   // refresh timers, so bail if we are already here.
   if (window.RiverWidget && window.RiverWidget.version) return;
 
-  var VERSION = '2.6.1';
+  var VERSION = '2.6.2';
   var USGS = 'https://api.waterdata.usgs.gov/ogcapi/v0/collections';
   var SELECTOR = 'a.riverwidget, .riverwidget-io, [data-river-site], [data-river-sites]';
   var hostSeq = 0;
@@ -130,7 +130,7 @@
 
   var THEMES = {
     river:  { bg:'#ffffff', fg:'#16233a', muted:'#63748f', line:'#dbe3ee', accent:'#1c6b8c', radius:'12px' },
-    slate:  { bg:'#f7f8fa', fg:'#1d2430', muted:'#68748a', line:'#dfe3ea', accent:'#3f5a76', radius:'10px' },
+    slate:  { bg:'#f7f8fa', fg:'#1d2430', muted:'#646f85', line:'#dfe3ea', accent:'#3f5a76', radius:'10px' },
     forest: { bg:'#ffffff', fg:'#152019', muted:'#5f7268', line:'#dae2dc', accent:'#2f6b46', radius:'12px' },
     sand:   { bg:'#fbf8f3', fg:'#241d14', muted:'#7a6b57', line:'#e6dccc', accent:'#9a6b24', radius:'8px' },
     night:  { bg:'#151d2b', fg:'#eaf0f8', muted:'#93a3ba', line:'#2c3a4f', accent:'#6fb6d4', radius:'12px' },
@@ -663,7 +663,7 @@
       // enough for one. Margins rather than gap: IE11 has flex-wrap but not
       // gap, and the fallback there would be no spacing at all.
       + scope + ' .rw-foot{margin:0;padding-top:10px;border-top:1px solid ' + t.line + ';'
-      + 'font-size:11px;color:' + t.muted + ';line-height:1.5;'
+      + 'font-size:12px;color:' + t.muted + ';line-height:1.5;'
       + 'display:-webkit-box;display:-ms-flexbox;display:flex;'
       + '-ms-flex-wrap:wrap;flex-wrap:wrap;'
       + '-webkit-box-align:baseline;-ms-flex-align:baseline;align-items:baseline;'
@@ -688,7 +688,7 @@
       + scope + ' .rw-src-label{margin:0 4px 0 6px;white-space:nowrap}'
       + scope + ' .rw-station{white-space:nowrap}'
       + scope + ' .rw-usgs{font-weight:700;letter-spacing:.04em;text-decoration:none' + bang + ';'
-      + 'border:1px solid ' + t.line + ';border-radius:3px;padding:1px 4px;font-size:10px}'
+      + 'border:1px solid ' + t.line + ';border-radius:3px;padding:1px 4px;font-size:11px}'
       + scope + ' .rw-usgs:hover,' + scope + ' .rw-usgs:focus{border-color:' + t.muted + '}'
       + scope + ' .rw-station{font-variant-numeric:tabular-nums;white-space:nowrap}'
       // A border-colour change is not a focus indicator (WCAG 2.4.11). Modern
@@ -697,9 +697,14 @@
       + scope + ' .rw-foot a:focus-visible,' + scope + ' .rw-badge a:focus-visible{'
       + 'outline:2px solid ' + accent + ';outline-offset:2px;border-radius:2px}'
       + scope + ' .rw-cached{color:' + t.muted + ';font-weight:600}'
-      + scope + ' .rw-badge{margin:8px 2px 0;text-align:right;font-size:11px;line-height:1.4}'
-      + scope + ' .rw-badge a{color:' + t.muted + ';text-decoration:none;opacity:.7}'
-      + scope + ' .rw-badge a:hover,' + scope + ' .rw-badge a:focus{opacity:1;text-decoration:underline}'
+      // The badge sits outside the card, on the host page, whose background
+      // the widget cannot know. In the theme's muted colour at 70% it measured
+      // 2.6:1 on a light page — and the night theme's muted on a white page
+      // fails even at full strength. The page's own text colour is the one
+      // colour already known to read on that background.
+      + scope + ' .rw-badge{margin:8px 2px 0;text-align:right;font-size:12px;line-height:1.4}'
+      + scope + ' .rw-badge a{color:inherit;text-decoration:none}'
+      + scope + ' .rw-badge a:hover,' + scope + ' .rw-badge a:focus{text-decoration:underline}'
       + scope + ' .rw-ext{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;'
       + 'stroke-linejoin:round;vertical-align:-1px;margin-left:4px}'
       // Visible to a screen reader, to nobody else. The clip/clip-path pair is
